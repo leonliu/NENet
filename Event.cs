@@ -1,8 +1,4 @@
-﻿using System.Collections;
-using System.Collections.Generic;
-using UnityEngine;
-
-namespace NT.Core.Net
+﻿namespace NT.Core.Net
 {
     public enum EventType
     {
@@ -10,6 +6,7 @@ namespace NT.Core.Net
         Data,
         Disconnected
     }
+
     public struct Event
     {
         public readonly string tag;

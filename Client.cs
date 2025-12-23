@@ -96,7 +96,7 @@ namespace NT.Core.Net
             catch (SocketException e)
             {
                 // connection fail
-                Debug.Log($"[Client] connection failed: tag={Ctag}, reason={e}");
+                Debug.LogWarning($"[Client] connection failed: tag={Ctag}, reason={e}");
                 _recvQueue.Enqueue(new Event(Ctag, EventType.Disconnected, null));
             }
             catch (Exception e)
@@ -104,7 +104,7 @@ namespace NT.Core.Net
                 // the thread maybe interrupted or aborted by disconnect, this is expected as a result
                 // of user request. for other type of exceptions, there is really something seriously
                 // wrong happened. Anyway we take a log here.
-                Debug.Log($"[Client] receive exception: tag={Ctag}, exception={e}");
+                Debug.LogWarning($"[Client] receive exception: tag={Ctag}, exception={e}");
             }
 
             // we may be here as connecting failed or connection closed or other exceptions happened

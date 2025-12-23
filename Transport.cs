@@ -15,7 +15,7 @@ namespace NT.Core.Net
         {
             get
             {
-                return (_client != null && _client.Connected) && (_client.Client != null && _client.Client.Connected);
+                return _client != null && _client.Connected && _client.Client.Connected;
             }
         }                
 
@@ -24,7 +24,7 @@ namespace NT.Core.Net
         /// indication that the received messages have not been processed in
         /// time.
         /// </summary>
-        public static int recvQueueWarningLevel = 1000;
+        public static int RecvQueueWarningLevel = 1000;
 
         /// <summary>
         /// Maximum packet size allowed, 16KB should be enough.
@@ -35,6 +35,11 @@ namespace NT.Core.Net
         /// Maximum send buffer size for packet combining, 64KB should be enough.
         /// </summary>
         private const int MaxSendBufferSize = 64 * 1024;
+
+        /// <summary>
+        /// Minimum packet size: 4 bytes command + 8 bytes token.
+        /// </summary>
+        private const int MinPacketSize = 12;
 
         // pre-allocated thread local buffers to avoid memory allocations
         [ThreadStatic]
@@ -83,7 +88,7 @@ namespace NT.Core.Net
             catch (Exception e)
             {
                 // stream.Write throws exceptions if server shuts down
-                Debug.Log($"[Transport] Send exception: {e}");
+                Debug.LogWarning($"[Transport] Send exception: {e}");
                 return false;
             }
         }
@@ -151,7 +156,7 @@ namespace NT.Core.Net
 
             // the packet payload always contains a 4 bytes command field and
             // 8 bytes token.
-            if (size > MaxPacketSize || size < 12)
+            if (size > MaxPacketSize || size < MinPacketSize)
             {
                 Debug.LogError($"[Transport] Receive invalid packet size: {size}");
                 return false;
@@ -173,7 +178,7 @@ namespace NT.Core.Net
 
             ulong token = Utils.ToUInt64(_token);
 
-            int bodySize = size - 12;
+            int bodySize = size - MinPacketSize;
             byte[] data = bodySize > 0 ? new byte[bodySize] : Array.Empty<byte>();
             if (bodySize > 0 && !stream.ReadExactly(data, bodySize))
                 return false;
@@ -197,7 +202,7 @@ namespace NT.Core.Net
                         break;
 
                     recvQueue.Enqueue(new Event(tag, EventType.Data, packet));
-                    if (recvQueue.Count > recvQueueWarningLevel)
+                    if (recvQueue.Count > RecvQueueWarningLevel)
                     {
                         TimeSpan elapsed = DateTime.Now - lastWarnTime;
                         if (elapsed.TotalSeconds > 10)
@@ -212,7 +217,7 @@ namespace NT.Core.Net
             {
                 // something wrong happens, the thread was interrupted or remote closed
                 // the connection or we closed it. Stop gracefully.
-                Debug.Log($"[Transport] Receive proc finished! tag={tag}, reason={e}");
+                Debug.LogWarning($"[Transport] Receive proc finished! tag={tag}, reason={e}");
             }
             finally
             {
@@ -249,7 +254,7 @@ namespace NT.Core.Net
             {
                 // Exceptions happen when thread is stopped, interrupted or connection is closed by either
                 // local or remote. Stop and cleanup gracefully
-                Debug.Log($"[Transport] Send proc finished! tag={tag}, reason={e}");
+                Debug.LogWarning($"[Transport] Send proc finished! tag={tag}, reason={e}");
             }
             finally
             {

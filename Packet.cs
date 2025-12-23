@@ -1,16 +1,12 @@
-﻿using System.Collections;
-using System.Collections.Generic;
-using UnityEngine;
-
-namespace NT.Core.Net
+﻿namespace NT.Core.Net
 {
     /// <summary>
     ///  0        1        2        3
     ///  +--------+--------+--------+--------+
-    ///  |           packet length           | 
-    ///  +-----------------------------------+  
+    ///  |           packet length           |
+    ///  +-----------------------------------+
     ///  |              command              |
-    ///  +-----------------------------------+  
+    ///  +-----------------------------------+
     ///  |              token                |
     ///  |                                   |
     ///  +-----------------------------------+
