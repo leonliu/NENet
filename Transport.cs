@@ -187,6 +187,12 @@ namespace NT.Core.Net
             return true;
         }
 
+        /// <summary>
+        /// Receive thread procedure. Receives packets from the server and queues events.
+        /// </summary>
+        /// <param name="tag">Connection tag for logging and event tagging.</param>
+        /// <param name="client">The TCP client.</param>
+        /// <param name="recvQueue">Queue to enqueue received events.</param>
         public static void Receive(string tag, TcpClient client, ConcurrentQueue<Event> recvQueue)
         {
             NetworkStream stream = client.GetStream();
@@ -228,6 +234,13 @@ namespace NT.Core.Net
             }
         }
 
+        /// <summary>
+        /// Send thread procedure. Sends packets from the send queue to the server.
+        /// </summary>
+        /// <param name="tag">Connection tag for logging.</param>
+        /// <param name="client">The TCP client.</param>
+        /// <param name="sendQueue">Queue containing packets to send.</param>
+        /// <param name="mre">Signal to wake the send thread when data is available.</param>
         public static void Send(string tag, TcpClient client, SafeQueue<byte[]> sendQueue, ManualResetEvent mre)
         {
             NetworkStream stream = client.GetStream();

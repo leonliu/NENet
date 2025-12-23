@@ -127,6 +127,11 @@ namespace NT.Core.Net
             return _recvQueue.TryDequeue(out ev);
         }
 
+        /// <summary>
+        /// Initiates an asynchronous connection to the specified server.
+        /// </summary>
+        /// <param name="ip">The IP address of the server.</param>
+        /// <param name="port">The port number of the server.</param>
         public void Connect(string ip, int port)
         {
             if (Connecting || Connected)
@@ -155,6 +160,9 @@ namespace NT.Core.Net
             _recvThread.Start();
         }
 
+        /// <summary>
+        /// Closes the connection and releases all resources.
+        /// </summary>
         public void Disconnect()
         {
             if (Connecting || Connected)
@@ -178,6 +186,11 @@ namespace NT.Core.Net
             }
         }
 
+        /// <summary>
+        /// Sends raw packet data to the server. Data must conform to the NENet packet protocol.
+        /// </summary>
+        /// <param name="data">The packet data to send (max 16KB).</param>
+        /// <returns>True if the data was queued successfully, false otherwise.</returns>
         public bool Send(byte[] data)
         {
             bool ret = true;
