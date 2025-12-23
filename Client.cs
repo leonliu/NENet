@@ -107,8 +107,8 @@ namespace NT.Core.Net
                 Debug.Log($"[Client] receive exception: tag={Ctag}, exception={e}");
             }
 
-            // we may be here as connecting failed or connection closed or other exceptions happened            
-            if (_sendThread != null) _sendThread.Interrupt();
+            // we may be here as connecting failed or connection closed or other exceptions happened
+            if (_sendThread != null && _sendThread.IsAlive) _sendThread.Interrupt();
 
             // reset connecting state since the setting above may not have chance to execute in case of connect fail
             _connecting = false;
@@ -137,7 +137,15 @@ namespace NT.Core.Net
 
             _connecting = true;
             _transport = new Transport();
-            _recvQueue = new ConcurrentQueue<Event>();
+
+            // drain any leftover events from previous connection
+            int leftoverCount = 0;
+            while (_recvQueue.TryDequeue(out _)) { leftoverCount++; }
+            if (leftoverCount > 0)
+            {
+                Debug.LogWarning($"[Client] Connect >> drained {leftoverCount} unhandled events from previous connection");
+            }
+
             _sendQueue.Clear();
             _cid += 1;
 
@@ -158,7 +166,15 @@ namespace NT.Core.Net
 
                 _connecting = false;
                 _sendQueue.Clear();
+
+                // drain receive queue to prevent memory leak of unprocessed packets
+                while (_recvQueue.TryDequeue(out _)) { }
+
                 _transport = null;
+
+                // dispose and recreate the signal for next connection
+                _sendDataSignal?.Dispose();
+                _sendDataSignal = new ManualResetEvent(false);
             }
         }
 

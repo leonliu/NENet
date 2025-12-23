@@ -53,8 +53,14 @@
         /// <returns></returns>
         public static ulong ToUInt64(byte[] bytes)
         {
-            return ((ulong)bytes[0] << 56) | ((ulong)bytes[1] << 48) | ((ulong)bytes[2] << 40) | (ulong)bytes[3] << 32 |
-                   ((ulong)bytes[4] << 24) | ((ulong)bytes[5] << 16) | ((ulong)bytes[6] << 8) | bytes[7];
+            return ((ulong)bytes[0] << 56)
+                 | ((ulong)bytes[1] << 48)
+                 | ((ulong)bytes[2] << 40)
+                 | ((ulong)bytes[3] << 32)
+                 | ((ulong)bytes[4] << 24)
+                 | ((ulong)bytes[5] << 16)
+                 | ((ulong)bytes[6] << 8)
+                 | bytes[7];
         }
     }
 }

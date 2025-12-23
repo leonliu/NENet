@@ -124,7 +124,7 @@ namespace NT.Core.Net
 
             // the packet payload always contains a 4 bytes command field and
             // 8 bytes token.
-            if (size > MaxPacketSize || size <= 12)
+            if (size > MaxPacketSize || size < 12)
             {
                 Debug.LogError($"[Transport] Receive invalid packet size: {size}");
                 return false;
