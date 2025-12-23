@@ -76,8 +76,7 @@ namespace NT.Core.Net
                 int startIndex = 0;
                 while (startIndex < packets.Length)
                 {
-                    if (!SendPacketBatch(stream, packets, ref startIndex))
-                        return false;
+                    SendPacketBatch(stream, packets, ref startIndex);
                 }
                 return true;
             }
@@ -89,7 +88,7 @@ namespace NT.Core.Net
             }
         }
 
-        static bool SendPacketBatch(NetworkStream stream, byte[][] packets, ref int startIndex)
+        static void SendPacketBatch(NetworkStream stream, byte[][] packets, ref int startIndex)
         {
             // calculate how many packets we can fit in this batch
             int totalSize = 0;
@@ -136,7 +135,6 @@ namespace NT.Core.Net
             stream.Write(_buffer, 0, totalSize);
 
             startIndex = endIndex;
-            return true;
         }
 
         static bool ReceivePacket(NetworkStream stream, out Packet packet)
