@@ -29,7 +29,12 @@ namespace NT.Core.Net
         /// <summary>
         /// Maximum packet size allowed, 16KB should be enough.
         /// </summary>
-        public static int MaxPacketSize = 16 * 1024;        
+        public static int MaxPacketSize = 16 * 1024;
+
+        /// <summary>
+        /// Maximum send buffer size for packet combining, 64KB should be enough.
+        /// </summary>
+        private const int MaxSendBufferSize = 64 * 1024;
 
         // pre-allocated thread local buffers to avoid memory allocations
         [ThreadStatic]
@@ -67,39 +72,13 @@ namespace NT.Core.Net
             try
             {
                 // combine multiple packets to avoid TCP overhead and get higher performance
-                int totalSize = 0;
-                for (int i = 0; i < packets.Length; i++)
+                // if total size exceeds MaxSendBufferSize, split into multiple batches
+                int startIndex = 0;
+                while (startIndex < packets.Length)
                 {
-                    // 4 bytes header + payload
-                    totalSize += sizeof(int) + packets[i].Length;
+                    if (!SendPacketBatch(stream, packets, ref startIndex))
+                        return false;
                 }
-
-                if (_buffer == null || _buffer.Length < totalSize)
-                {
-                    _buffer = new byte[totalSize];
-                }
-
-                int pos = 0;
-                for (int i = 0; i < packets.Length; i++)
-                {
-                    if (_header == null)
-                    {
-                        _header = new byte[4];
-                    }
-
-                    // save the packet length to header
-                    Utils.GetBytes(packets[i].Length, _header);
-
-                    // pack header and packet data to buffer
-                    Array.Copy(_header, 0, _buffer, pos, _header.Length);
-                    pos += _header.Length;
-                    Array.Copy(packets[i], 0, _buffer, pos, packets[i].Length);
-                    pos += packets[i].Length;
-                }
-
-                // send to remote, the Write method blocks until the requested number 
-                // of bytes is sent or a SocketException is thrown.
-                stream.Write(_buffer, 0, totalSize);
                 return true;
             }
             catch (Exception e)
@@ -108,6 +87,56 @@ namespace NT.Core.Net
                 Debug.Log($"[Transport] Send exception: {e}");
                 return false;
             }
+        }
+
+        static bool SendPacketBatch(NetworkStream stream, byte[][] packets, ref int startIndex)
+        {
+            // calculate how many packets we can fit in this batch
+            int totalSize = 0;
+            int endIndex = startIndex;
+
+            while (endIndex < packets.Length)
+            {
+                int packetSize = sizeof(int) + packets[endIndex].Length;
+                if (totalSize + packetSize > MaxSendBufferSize)
+                    break;
+                totalSize += packetSize;
+                endIndex++;
+            }
+
+            // ensure we include at least one packet (even if it exceeds buffer size)
+            if (endIndex == startIndex)
+                endIndex = startIndex + 1;
+
+            if (_buffer == null || _buffer.Length < totalSize)
+            {
+                _buffer = new byte[totalSize];
+            }
+
+            int pos = 0;
+            for (int i = startIndex; i < endIndex; i++)
+            {
+                if (_header == null)
+                {
+                    _header = new byte[4];
+                }
+
+                // save the packet length to header
+                Utils.GetBytes(packets[i].Length, _header);
+
+                // pack header and packet data to buffer
+                Array.Copy(_header, 0, _buffer, pos, _header.Length);
+                pos += _header.Length;
+                Array.Copy(packets[i], 0, _buffer, pos, packets[i].Length);
+                pos += packets[i].Length;
+            }
+
+            // send to remote, the Write method blocks until the requested number
+            // of bytes is sent or a SocketException is thrown.
+            stream.Write(_buffer, 0, totalSize);
+
+            startIndex = endIndex;
+            return true;
         }
 
         static bool ReceivePacket(NetworkStream stream, out Packet packet)

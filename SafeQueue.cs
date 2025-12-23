@@ -62,9 +62,14 @@ namespace NT.Core.Net
         {
             lock (_queue)
             {
+                if (_queue.Count == 0)
+                {
+                    result = Array.Empty<T>();
+                    return false;
+                }
                 result = _queue.ToArray();
                 _queue.Clear();
-                return result.Length > 0;
+                return true;
             }
         }
 

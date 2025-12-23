@@ -181,7 +181,12 @@ namespace NT.Core.Net
         public bool Send(byte[] data)
         {
             bool ret = true;
-            if (Connected)
+            if (data == null || data.Length == 0)
+            {
+                ret = false;
+                Debug.LogError($"[Client] Send >> data is null or empty");
+            }
+            else if (Connected)
             {
                 if (data.Length <= Transport.MaxPacketSize)
                 {
