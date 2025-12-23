@@ -1,4 +1,4 @@
-﻿#if !UNITY_WEBGL
+#if !UNITY_WEBGL
 using System;
 using System.Collections.Concurrent;
 using System.Threading;
@@ -7,6 +7,10 @@ using UnityEngine;
 
 namespace NT.Core.Net
 {
+    /// <summary>
+    /// Low-level TCP transport layer. Protocol-agnostic - works with raw byte arrays.
+    /// Uses a simple length-prefix protocol: [4-byte length][payload bytes]
+    /// </summary>
     public class Transport
     {
         private TcpClient _client;
@@ -17,7 +21,7 @@ namespace NT.Core.Net
             {
                 return _client != null && _client.Connected && _client.Client.Connected;
             }
-        }                
+        }
 
         /// <summary>
         /// Alert is set if receive queue size exceeds this value. It is an
@@ -27,27 +31,18 @@ namespace NT.Core.Net
         public static int RecvQueueWarningLevel = 1000;
 
         /// <summary>
-        /// Maximum packet size allowed, 16KB should be enough.
+        /// Maximum message size allowed, 16KB should be enough.
         /// </summary>
-        public static int MaxPacketSize = 16 * 1024;
+        public static int MaxMessageSize = 16 * 1024;
 
         /// <summary>
-        /// Maximum send buffer size for packet combining, 64KB should be enough.
+        /// Maximum send buffer size for message combining, 64KB should be enough.
         /// </summary>
         private const int MaxSendBufferSize = 64 * 1024;
-
-        /// <summary>
-        /// Minimum packet size: 4 bytes command + 8 bytes token.
-        /// </summary>
-        private const int MinPacketSize = 12;
 
         // pre-allocated thread local buffers to avoid memory allocations
         [ThreadStatic]
         static byte[] _header;
-        [ThreadStatic]
-        static byte[] _command;
-        [ThreadStatic]
-        static byte[] _token;
 
         // send buffer, every thread has a send buffer pre-allocated
         [ThreadStatic]
@@ -56,7 +51,7 @@ namespace NT.Core.Net
         public Transport()
         {
             // TcpClient() creates IPv4 socket, clear the internal socket
-            // so that later Connect() call will resolve the hostname and 
+            // so that later Connect() call will resolve the hostname and
             // create IPv4 or IPv6 socket as needed.
             _client = new TcpClient();
             _client.Client = null;
@@ -72,16 +67,16 @@ namespace NT.Core.Net
             _client.Close();
         }
 
-        static bool SendPacket(NetworkStream stream, byte[][] packets)
+        static bool SendMessage(NetworkStream stream, byte[][] messages)
         {
             try
             {
-                // combine multiple packets to avoid TCP overhead and get higher performance
+                // combine multiple messages to avoid TCP overhead and get higher performance
                 // if total size exceeds MaxSendBufferSize, split into multiple batches
                 int startIndex = 0;
-                while (startIndex < packets.Length)
+                while (startIndex < messages.Length)
                 {
-                    SendPacketBatch(stream, packets, ref startIndex);
+                    SendMessageBatch(stream, messages, ref startIndex);
                 }
                 return true;
             }
@@ -93,22 +88,22 @@ namespace NT.Core.Net
             }
         }
 
-        static void SendPacketBatch(NetworkStream stream, byte[][] packets, ref int startIndex)
+        static void SendMessageBatch(NetworkStream stream, byte[][] messages, ref int startIndex)
         {
-            // calculate how many packets we can fit in this batch
+            // calculate how many messages we can fit in this batch
             int totalSize = 0;
             int endIndex = startIndex;
 
-            while (endIndex < packets.Length)
+            while (endIndex < messages.Length)
             {
-                int packetSize = sizeof(int) + packets[endIndex].Length;
-                if (totalSize + packetSize > MaxSendBufferSize)
+                int messageSize = sizeof(int) + messages[endIndex].Length;
+                if (totalSize + messageSize > MaxSendBufferSize)
                     break;
-                totalSize += packetSize;
+                totalSize += messageSize;
                 endIndex++;
             }
 
-            // ensure we include at least one packet (even if it exceeds buffer size)
+            // ensure we include at least one message (even if it exceeds buffer size)
             if (endIndex == startIndex)
                 endIndex = startIndex + 1;
 
@@ -125,14 +120,14 @@ namespace NT.Core.Net
                     _header = new byte[4];
                 }
 
-                // save the packet length to header
-                Utils.GetBytes(packets[i].Length, _header);
+                // save the message length to header
+                Utils.GetBytes(messages[i].Length, _header);
 
-                // pack header and packet data to buffer
+                // pack header and message data to buffer
                 Array.Copy(_header, 0, _buffer, pos, _header.Length);
                 pos += _header.Length;
-                Array.Copy(packets[i], 0, _buffer, pos, packets[i].Length);
-                pos += packets[i].Length;
+                Array.Copy(messages[i], 0, _buffer, pos, messages[i].Length);
+                pos += messages[i].Length;
             }
 
             // send to remote, the Write method blocks until the requested number
@@ -142,53 +137,37 @@ namespace NT.Core.Net
             startIndex = endIndex;
         }
 
-        static bool ReceivePacket(NetworkStream stream, out Packet packet)
+        static bool ReceiveMessage(NetworkStream stream, out byte[] data)
         {
-            packet = null;
+            data = null;
 
             if (_header == null)
                 _header = new byte[4];
 
+            // Read message length (4 bytes)
             if (!stream.ReadExactly(_header, 4))
                 return false;
 
             int size = Utils.ToInt32(_header);
 
-            // the packet payload always contains a 4 bytes command field and
-            // 8 bytes token.
-            if (size > MaxPacketSize || size < MinPacketSize)
+            // Validate message size
+            if (size <= 0 || size > MaxMessageSize)
             {
-                Debug.LogError($"[Transport] Receive invalid packet size: {size}");
+                Debug.LogError($"[Transport] Receive invalid message size: {size}");
                 return false;
             }
 
-            if (_command == null)
-                _command = new byte[4];
-
-            if (!stream.ReadExactly(_command, 4))
+            // Read message payload
+            data = new byte[size];
+            if (!stream.ReadExactly(data, size))
                 return false;
 
-            uint command = Utils.ToUInt32(_command);
-
-            if (_token == null)
-                _token = new byte[8];
-
-            if (!stream.ReadExactly(_token, 8))
-                return false;
-
-            ulong token = Utils.ToUInt64(_token);
-
-            int bodySize = size - MinPacketSize;
-            byte[] data = bodySize > 0 ? new byte[bodySize] : Array.Empty<byte>();
-            if (bodySize > 0 && !stream.ReadExactly(data, bodySize))
-                return false;
-
-            packet = new Packet(command, token, data);
             return true;
         }
 
         /// <summary>
-        /// Receive thread procedure. Receives packets from the server and queues events.
+        /// Receive thread procedure. Receives raw byte messages from the server and queues events.
+        /// Uses length-prefix protocol: [4-byte length][payload]
         /// </summary>
         /// <param name="tag">Connection tag for logging and event tagging.</param>
         /// <param name="client">The TCP client.</param>
@@ -203,11 +182,11 @@ namespace NT.Core.Net
                 recvQueue.Enqueue(new Event(tag, EventType.Connected, null));
                 while (true)
                 {
-                    Packet packet;
-                    if (!ReceivePacket(stream, out packet))
+                    byte[] data;
+                    if (!ReceiveMessage(stream, out data))
                         break;
 
-                    recvQueue.Enqueue(new Event(tag, EventType.Data, packet));
+                    recvQueue.Enqueue(new Event(tag, EventType.Data, data));
                     if (recvQueue.Count > RecvQueueWarningLevel)
                     {
                         TimeSpan elapsed = DateTime.Now - lastWarnTime;
@@ -235,11 +214,11 @@ namespace NT.Core.Net
         }
 
         /// <summary>
-        /// Send thread procedure. Sends packets from the send queue to the server.
+        /// Send thread procedure. Sends messages from the send queue to the server.
         /// </summary>
         /// <param name="tag">Connection tag for logging.</param>
         /// <param name="client">The TCP client.</param>
-        /// <param name="sendQueue">Queue containing packets to send.</param>
+        /// <param name="sendQueue">Queue containing messages to send.</param>
         /// <param name="mre">Signal to wake the send thread when data is available.</param>
         public static void Send(string tag, TcpClient client, SafeQueue<byte[]> sendQueue, ManualResetEvent mre)
         {
@@ -252,10 +231,10 @@ namespace NT.Core.Net
                     // reset the signal
                     mre.Reset();
 
-                    byte[][] packets;
-                    if (sendQueue.TryDequeueAll(out packets))
+                    byte[][] messages;
+                    if (sendQueue.TryDequeueAll(out messages))
                     {
-                        if (!SendPacket(stream, packets))
+                        if (!SendMessage(stream, messages))
                             break;
                     }
 

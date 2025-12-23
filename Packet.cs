@@ -1,18 +1,8 @@
-﻿namespace NT.Core.Net
+namespace NT.Core.Net.Protocol
 {
     /// <summary>
-    ///  0        1        2        3
-    ///  +--------+--------+--------+--------+
-    ///  |           packet length           |
-    ///  +-----------------------------------+
-    ///  |              command              |
-    ///  +-----------------------------------+
-    ///  |              token                |
-    ///  |                                   |
-    ///  +-----------------------------------+
-    ///  |              body ...             |
-    ///  |                                   |
-    ///  +-----------------------------------+
+    /// NENet protocol packet structure.
+    /// Format: [length(4)][command(4)][token(8)][body...]
     /// </summary>
     public class Packet
     {
@@ -20,7 +10,7 @@
         {
             Command = command;
             Token = token;
-            Body = body ?? Array.Empty<byte>();
+            Body = body ?? System.Array.Empty<byte>();
         }
 
         public uint Command { get; set; }

@@ -187,9 +187,10 @@ namespace NT.Core.Net
         }
 
         /// <summary>
-        /// Sends raw packet data to the server. Data must conform to the NENet packet protocol.
+        /// Sends raw byte data to the server. The data is sent with a length prefix.
+        /// For protocol-specific packets, use PacketClient with a codec instead.
         /// </summary>
-        /// <param name="data">The packet data to send (max 16KB).</param>
+        /// <param name="data">The raw byte data to send (max 16KB).</param>
         /// <returns>True if the data was queued successfully, false otherwise.</returns>
         public bool Send(byte[] data)
         {
@@ -201,7 +202,7 @@ namespace NT.Core.Net
             }
             else if (Connected)
             {
-                if (data.Length <= Transport.MaxPacketSize)
+                if (data.Length <= Transport.MaxMessageSize)
                 {
                     _sendQueue.Enqueue(data);
                     _sendDataSignal.Set();

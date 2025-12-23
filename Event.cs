@@ -1,4 +1,4 @@
-﻿namespace NT.Core.Net
+namespace NT.Core.Net
 {
     public enum EventType
     {
@@ -7,17 +7,20 @@
         Disconnected
     }
 
+    /// <summary>
+    /// Protocol-agnostic network event.
+    /// </summary>
     public struct Event
     {
         public readonly string tag;
         public readonly EventType eventType;
-        public readonly Packet packet;
+        public readonly byte[] data;
 
-        public Event(string tag, EventType eventType, Packet packet)
+        public Event(string tag, EventType eventType, byte[] data)
         {
             this.tag = tag;
             this.eventType = eventType;
-            this.packet = packet;
+            this.data = data;
         }
     }
 }

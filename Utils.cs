@@ -26,6 +26,45 @@
             bytes[3] = (byte)value;
         }
 
+        public static void GetBytes(int value, byte[] bytes, int offset)
+        {
+            bytes[offset + 0] = (byte)(value >> 24);
+            bytes[offset + 1] = (byte)(value >> 16);
+            bytes[offset + 2] = (byte)(value >> 8);
+            bytes[offset + 3] = (byte)value;
+        }
+
+        /// <summary>
+        /// Get bytes of long value, in network order (big endian).
+        /// </summary>
+        /// <param name="value"></param>
+        /// <returns></returns>
+        public static byte[] GetBytes(long value)
+        {
+            return new byte[] {
+               (byte)(value >> 56),
+               (byte)(value >> 48),
+               (byte)(value >> 40),
+               (byte)(value >> 32),
+               (byte)(value >> 24),
+               (byte)(value >> 16),
+               (byte)(value >> 8),
+               (byte)value
+           };
+        }
+
+        public static void GetBytes(long value, byte[] bytes, int offset)
+        {
+            bytes[offset + 0] = (byte)(value >> 56);
+            bytes[offset + 1] = (byte)(value >> 48);
+            bytes[offset + 2] = (byte)(value >> 40);
+            bytes[offset + 3] = (byte)(value >> 32);
+            bytes[offset + 4] = (byte)(value >> 24);
+            bytes[offset + 5] = (byte)(value >> 16);
+            bytes[offset + 6] = (byte)(value >> 8);
+            bytes[offset + 7] = (byte)value;
+        }
+
         /// <summary>
         /// Get int value from bytes in big endian order.
         /// </summary>
