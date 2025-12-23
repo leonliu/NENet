@@ -1,6 +1,5 @@
 #if !UNITY_WEBGL
 using System;
-using UnityEngine;
 
 namespace NT.Core.Net
 {

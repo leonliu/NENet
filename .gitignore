@@ -1,4 +1,11 @@
-# Unity
+# .NET build outputs
+bin/
+obj/
+*.pdb
+*.dll
+*.xml
+
+# Unity (when this folder is placed in Assets)
 [Ll]ibrary/
 [Tt]emp/
 [Oo]bj/
@@ -6,16 +13,13 @@
 [Bb]uilds/
 [Ll]ogs/
 [Mm]emoryCaptures/
-*.csproj
-*.sln
 *.user
 *.unity
 
 # macOS
 .DS_Store
 
-# IDE
-.vscode/
+# IDE - keep VS Code settings for this project
 .idea/
 *.swp
 *.swo

@@ -1,0 +1,133 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+        "label": "build (Debug)",
+        "command": "dotnet",
+        "type": "process",
+        "args": [
+            "build",
+            "${workspaceFolder}/NENet.csproj",
+            "/property:GenerateFullPaths=true",
+            "/consoleloggerparameters:NoSummary"
+        ],
+        "problemMatcher": "$msCompile",
+        "group": {
+            "kind": "build",
+            "isDefault": true
+        }
+    },
+    {
+        "label": "build (Release)",
+        "command": "dotnet",
+        "type": "process",
+        "args": [
+            "build",
+            "${workspaceFolder}/NENet.csproj",
+            "/property:Configuration=Release",
+            "/property:GenerateFullPaths=true",
+            "/consoleloggerparameters:NoSummary"
+        ],
+        "problemMatcher": "$msCompile",
+        "group": "build"
+    },
+    {
+        "label": "clean",
+        "command": "dotnet",
+        "type": "process",
+        "args": [
+            "clean",
+            "${workspaceFolder}/NENet.csproj"
+        ],
+        "problemMatcher": "$msCompile"
+    },
+    {
+        "label": "restore",
+        "command": "dotnet",
+        "type": "process",
+        "args": [
+            "restore",
+            "${workspaceFolder}/NENet.csproj"
+        ],
+        "problemMatcher": "$msCompile"
+    },
+    {
+        "label": "publish (win-x64)",
+        "command": "dotnet",
+        "type": "process",
+        "args": [
+            "publish",
+            "${workspaceFolder}/NENet.csproj",
+            "/property:Configuration=Release",
+            "-r",
+            "win-x64",
+            "-c",
+            "Release",
+            "--self-contained",
+            "false"
+        ],
+        "problemMatcher": "$msCompile"
+    },
+    {
+        "label": "publish (linux-x64)",
+        "command": "dotnet",
+        "type": "process",
+        "args": [
+            "publish",
+            "${workspaceFolder}/NENet.csproj",
+            "/property:Configuration=Release",
+            "-r",
+            "linux-x64",
+            "-c",
+            "Release",
+            "--self-contained",
+            "false"
+        ],
+        "problemMatcher": "$msCompile"
+    },
+    {
+        "label": "publish (osx-x64)",
+        "command": "dotnet",
+        "type": "process",
+        "args": [
+            "publish",
+            "${workspaceFolder}/NENet.csproj",
+            "/property:Configuration=Release",
+            "-r",
+            "osx-x64",
+            "-c",
+            "Release",
+            "--self-contained",
+            "false"
+        ],
+        "problemMatcher": "$msCompile"
+    },
+    {
+        "label": "publish (osx-arm64)",
+        "command": "dotnet",
+        "type": "process",
+        "args": [
+            "publish",
+            "${workspaceFolder}/NENet.csproj",
+            "/property:Configuration=Release",
+            "-r",
+            "osx-arm64",
+            "-c",
+            "Release",
+            "--self-contained",
+            "false"
+        ],
+        "problemMatcher": "$msCompile"
+    },
+    {
+        "label": "publish (All Platforms)",
+        "dependsOn": [
+            "publish (win-x64)",
+            "publish (linux-x64)",
+            "publish (osx-x64)",
+            "publish (osx-arm64)"
+        ],
+        "group": "build"
+    }
+]
+}

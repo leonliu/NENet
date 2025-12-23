@@ -63,6 +63,8 @@ namespace NT.Core.Net
 
         public Client(string tag)
         {
+            if (string.IsNullOrEmpty(tag))
+                throw new ArgumentException("Tag cannot be null or empty", nameof(tag));
             _tag = tag;
             _cid = 0;
         }
@@ -134,6 +136,9 @@ namespace NT.Core.Net
         /// <param name="port">The port number of the server.</param>
         public void Connect(string ip, int port)
         {
+            if (string.IsNullOrEmpty(ip))
+                throw new ArgumentException("IP address cannot be null or empty", nameof(ip));
+
             if (Connecting || Connected)
             {
                 Debug.Log($"[Client] Connect >> already connecting or connected");
@@ -194,11 +199,14 @@ namespace NT.Core.Net
         /// <returns>True if the data was queued successfully, false otherwise.</returns>
         public bool Send(byte[] data)
         {
+            if (data == null)
+                throw new ArgumentNullException(nameof(data));
+
             bool ret = true;
-            if (data == null || data.Length == 0)
+            if (data.Length == 0)
             {
                 ret = false;
-                Debug.LogError($"[Client] Send >> data is null or empty");
+                Debug.LogError($"[Client] Send >> data is empty");
             }
             else if (Connected)
             {

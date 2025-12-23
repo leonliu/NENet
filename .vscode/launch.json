@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": ".NET Build (Debug)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build (Debug)",
+      "program": "${workspaceFolder}/bin/Debug/net8.0/osx-arm64/NENet.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false
+    },
+    {
+      "name": ".NET Build (Release)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build (Release)",
+      "program": "${workspaceFolder}/bin/Release/net8.0/osx-arm64/NENet.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  // OmniSharp settings
+  "omnisharp.enableRoslynAnalyzers": true,
+"omnisharp.enableEditorConfigSupport": true,
+  "omnisharp.enableDecompilationSupport": true,
+
+  // .NET Core settings
+  "dotnet.defaultSolution": "NENet.sln",
+
+  // File exclusions
+  "files.exclude": {
+    "**/.git": true,
+    "**/.DS_Store": true,
+    "**/bin": true,
+    "**/obj": true
+  },
+
+  // Search exclusions
+  "search.exclude": {
+    "**/bin": true,
+    "**/obj": true,
+    "**/.git": true
+  },
+
+  // Watch exclusions
+  "files.watcherExclude": {
+    "**/bin": true,
+    "**/obj": true
+  },
+
+  // C# formatting
+  "[csharp]": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "ms-dotnettools.csharp"
+  },
+
+  // Recommended extensions
+  "recommendations": [
+    "ms-dotnettools.csharp",
+    "ms-dotnettools.csdevkit",
+    "ms-dotnettools.dotnet-interactive-vscode",
+    "formulahendry.dotnet-test-explorer"
+],
+"dotnet.completion.showCompletionItemsFromUnimportedNamespaces": true
+}

@@ -24,6 +24,8 @@ namespace NT.Core.Net
         /// <param name="codec">The packet codec to use. If null, uses NENetPacketCodec.</param>
         public PacketClient(string tag, IPacketCodec codec = null) : base(tag)
         {
+            // codec can be null - will use default NENetPacketCodec
+            // base(tag) already validates tag
             _codec = codec ?? new NENetPacketCodec();
         }
 
