@@ -146,8 +146,9 @@ namespace NT.Core.Net
 
             ulong token = Utils.ToUInt64(_token);
 
-            byte[] data = new byte[size - 12];
-            if (!stream.ReadExactly(data, size))
+            int bodySize = size - 12;
+            byte[] data = bodySize > 0 ? new byte[bodySize] : Array.Empty<byte>();
+            if (bodySize > 0 && !stream.ReadExactly(data, bodySize))
                 return false;
 
             packet = new Packet(command, token, data);

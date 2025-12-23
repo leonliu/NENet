@@ -24,7 +24,7 @@ namespace NT.Core.Net
         {
             Command = command;
             Token = token;
-            Body = body;
+            Body = body ?? Array.Empty<byte>();
         }
 
         public uint Command { get; set; }
