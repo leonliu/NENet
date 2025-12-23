@@ -1,6 +1,7 @@
-﻿#if !UNITY_WEBGL
+#if !UNITY_WEBGL
 using System;
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using UnityEngine;
@@ -46,6 +47,12 @@ namespace NT.Core.Net
         /// in milliseconds.
         /// </summary>
         public int SendTimeout = 5000;
+
+        /// <summary>
+        /// Preferred address family for connections. Unspecified = try IPv6 first, fallback to IPv4.
+        /// InterNetwork = IPv4 only, InterNetworkV6 = IPv6 only.
+        /// </summary>
+        public AddressFamily AddressFamily { get; set; } = AddressFamily.Unspecified;
 
         private Transport _transport;
 
@@ -132,12 +139,12 @@ namespace NT.Core.Net
         /// <summary>
         /// Initiates an asynchronous connection to the specified server.
         /// </summary>
-        /// <param name="ip">The IP address of the server.</param>
+        /// <param name="host">The host name or IP address (IPv4 or IPv6) of the server.</param>
         /// <param name="port">The port number of the server.</param>
-        public void Connect(string ip, int port)
+        public void Connect(string host, int port)
         {
-            if (string.IsNullOrEmpty(ip))
-                throw new ArgumentException("IP address cannot be null or empty", nameof(ip));
+            if (string.IsNullOrEmpty(host))
+                throw new ArgumentException("Host cannot be null or empty", nameof(host));
 
             if (Connecting || Connected)
             {
@@ -146,7 +153,7 @@ namespace NT.Core.Net
             }
 
             _connecting = true;
-            _transport = new Transport();
+            _transport = new Transport { AddressFamily = this.AddressFamily };
 
             // drain any leftover events from previous connection
             int leftoverCount = 0;
@@ -160,7 +167,7 @@ namespace NT.Core.Net
             _cid += 1;
 
             // do the connecting in a seperate thread since it may take long time
-            _recvThread = new Thread(() => { RecvThreadFunc(ip, port); });
+            _recvThread = new Thread(() => { RecvThreadFunc(host, port); });
             _recvThread.IsBackground = true;
             _recvThread.Start();
         }

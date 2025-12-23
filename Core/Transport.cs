@@ -1,8 +1,10 @@
 #if !UNITY_WEBGL
 using System;
 using System.Collections.Concurrent;
-using System.Threading;
+using System.Linq;
+using System.Net;
 using System.Net.Sockets;
+using System.Threading;
 using UnityEngine;
 
 namespace NT.Core.Net
@@ -40,6 +42,12 @@ namespace NT.Core.Net
         /// </summary>
         private const int MaxSendBufferSize = 64 * 1024;
 
+        /// <summary>
+        /// Preferred address family for connections. Unspecified = try IPv6 first, fallback to IPv4.
+        /// InterNetwork = IPv4 only, InterNetworkV6 = IPv6 only.
+        /// </summary>
+        public AddressFamily AddressFamily { get; set; } = AddressFamily.Unspecified;
+
         // pre-allocated thread local buffers to avoid memory allocations
         [ThreadStatic]
         static byte[] _header;
@@ -50,16 +58,57 @@ namespace NT.Core.Net
 
         public Transport()
         {
-            // TcpClient() creates IPv4 socket, clear the internal socket
-            // so that later Connect() call will resolve the hostname and
-            // create IPv4 or IPv6 socket as needed.
             _client = new TcpClient();
-            _client.Client = null;
         }
 
-        public void Connect(string ip, int port)
+        /// <summary>
+        /// Connects to the specified host and port.
+        /// </summary>
+        /// <param name="host">The host name or IP address (IPv4 or IPv6 literal).</param>
+        /// <param name="port">The port number.</param>
+        public void Connect(string host, int port)
         {
-            _client.Connect(ip, port);
+            if (IPAddress.TryParse(host, out IPAddress ip))
+            {
+                // Direct IP connection (supports both IPv4 and IPv6 literals)
+                _client.Connect(new IPEndPoint(ip, port));
+            }
+            else
+            {
+                // Hostname - DNS resolution with address family preference
+                ConnectDns(host, port);
+            }
+        }
+
+        /// <summary>
+        /// Connects to a host via DNS resolution, respecting the AddressFamily preference.
+        /// </summary>
+        private void ConnectDns(string host, int port)
+        {
+            IPAddress[] results = Dns.GetHostAddresses(host);
+            IPAddress chosen = null;
+
+            if (AddressFamily == AddressFamily.InterNetwork)
+            {
+                // IPv4 only
+                chosen = results.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
+            }
+            else if (AddressFamily == AddressFamily.InterNetworkV6)
+            {
+                // IPv6 only
+                chosen = results.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetworkV6);
+            }
+            else
+            {
+                // Unspecified: Try IPv6 first (happy eyeballs - typically faster), fallback to IPv4
+                chosen = results.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetworkV6)
+                     ?? results.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
+            }
+
+            if (chosen == null)
+                throw new SocketException((int)SocketError.AddressNotAvailable);
+
+            _client.Connect(new IPEndPoint(chosen, port));
         }
 
         public void Close()
