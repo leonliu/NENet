@@ -1,6 +1,6 @@
 # NENet
 
-A lightweight TCP networking library for Unity games/applications with protocol-agnostic transport layer and pluggable codec system.
+A lightweight TCP networking library for Unity games/applications with protocol-agnostic transport layer, pluggable codec system, and built-in security layer.
 
 ## Features
 
@@ -9,7 +9,10 @@ A lightweight TCP networking library for Unity games/applications with protocol-
 - **Protocol-agnostic transport** - Core networking layer works with raw byte arrays
 - **Pluggable codec system** - Easy to implement custom packet protocols via `IPacketCodec`
 - **Built-in NENet protocol** - Efficient big-endian packet format with `NENetPacketCodec`
+- **Security layer** - Production-grade encryption with pluggable ciphers (ChaCha20-Poly1305, ChaCha20, RC4, XOR)
+- **IPv6 support** - Full support for IPv6 with happy eyeballs (IPv6-first, fallback to IPv4)
 - **Connection tagging** - Unique identifiers for multiple connection attempts
+- **Cross-platform** - Works on little-endian and big-endian systems
 - **WebGL-safe** - Automatically disabled for WebGL builds
 
 ## Requirements
@@ -23,13 +26,18 @@ Copy all `.cs` files from this repository into your Unity project under `Assets/
 
 ## Quick Start
 
-### Using PacketClient (Recommended - with built-in protocol)
+### Using PacketClient with Encryption (Recommended)
 
 ```csharp
 using NT.Core.Net;
+using NT.Core.Net.Security;
 
-// Create a packet client with the default NENet codec
-PacketClient client = new PacketClient("myclient");
+// Create a packet client with encryption
+var codec = new DefaultPacketCodec();
+var cipher = new ChaCha20Poly1305Cipher("my-secret-key");
+var secureCodec = new SecurePacketCodec(codec, cipher);
+
+PacketClient client = new PacketClient("myclient", secureCodec);
 
 // Connect to a server
 client.Connect("127.0.0.1", 8080);
@@ -59,12 +67,22 @@ void Update()
     }
 }
 
-// Send a packet with command, token, and body
+// Send a packet with command, token, and body (automatically encrypted)
 client.SendPacket(1, 0, System.Text.Encoding.UTF8.GetBytes("Hello"));
 
 // Disconnect
 client.Disconnect();
 ```
+
+### Available Ciphers
+
+| Cipher | Type | Security Level | Use Case |
+|--------|------|----------------|----------|
+| `ChaCha20Poly1305Cipher` | AEAD | Strong (recommended) | Production use, provides confidentiality + authentication |
+| `ChaCha20Cipher` | Stream cipher | Strong | Alternative to ChaCha20-Poly1305, confidentiality only |
+| `Rc4Cipher` | Stream cipher | Weak (legacy) | Compatibility with existing servers only |
+| `XorCipher` | Obfuscation | None | Light obfuscation only, not real encryption |
+| `NullCipher` | None | None | Plaintext, for testing/debugging |
 
 ### Using Raw Client (Protocol-agnostic)
 
@@ -130,9 +148,19 @@ PacketClient client = new PacketClient("myclient", new MyCodec());
 │  │ NENetPacketCodec │  │  Custom Codecs   │                │
 │  └──────────────────┘  └──────────────────┘                │
 ├─────────────────────────────────────────────────────────────┤
+│                   Security Layer (Optional)                  │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │              SecurePacketCodec (Decorator)            │    │
+│  │  ┌────────────┐ ┌────────────┐ ┌─────────────────┐   │    │
+│  │  │ChaCha20-Poly│ │ ChaCha20   │ │ RC4 │ XOR │ None │   │    │
+│  │  │1305 (AEAD) │ │ (Stream)   │ └─────────────────┘   │    │
+│  │  └────────────┘ └────────────┘                         │    │
+│  └─────────────────────────────────────────────────────┘    │
+├─────────────────────────────────────────────────────────────┤
 │                     Transport (protocol-agnostic)            │
 │  - Length-prefix framing: [4-byte length][payload]           │
 │  - Send/Receive threads                                       │
+│  - IPv6 support with happy eyeballs                          │
 ├─────────────────────────────────────────────────────────────┤
 │                       TCP Socket                              │
 └─────────────────────────────────────────────────────────────┘
@@ -156,6 +184,85 @@ The default `NENetPacketCodec` uses a binary protocol with big-endian byte order
 
 - Minimum packet size: **12 bytes** (command + token only)
 - Maximum packet size: **16KB**
+
+## Security Layer
+
+### Adding Encryption to Any Codec
+
+The `SecurePacketCodec` decorator wraps any `IPacketCodec` with encryption:
+
+```csharp
+// Wrap any codec with any cipher
+var codec = new DefaultPacketCodec();
+var cipher = new ChaCha20Poly1305Cipher("secret-key");
+var secureCodec = new SecurePacketCodec(codec, cipher);
+```
+
+### Cipher Details
+
+#### ChaCha20-Poly1305 (Recommended)
+
+- **Type**: Authenticated Encryption with Associated Data (AEAD)
+- **Key size**: 256 bits (derived from any string via SHA256)
+- **Nonce**: Auto-generated per message (12 bytes)
+- **Tag**: 128-bit authentication tag
+- **Output format**: `[12B nonce][ciphertext][16B tag]`
+- **Protection**: Confidentiality + integrity + authentication
+- **Standard**: RFC 7539
+
+```csharp
+var cipher = new ChaCha20Poly1305Cipher("my-secret-key");
+// or with raw key:
+var cipher = new ChaCha20Poly1305Cipher(key32Bytes);
+```
+
+#### ChaCha20
+
+- **Type**: Stream cipher
+- **Key size**: 256 bits
+- **Nonce**: Auto-generated per message (12 bytes)
+- **Output format**: `[12B nonce][ciphertext]`
+- **Protection**: Confidentiality only
+- **Standard**: RFC 7539
+
+```csharp
+var cipher = new ChaCha20Cipher("my-secret-key");
+// or with fixed nonce (not recommended for multiple messages):
+var cipher = new ChaCha20Cipher(key32Bytes, nonce12Bytes);
+```
+
+#### RC4 (Legacy)
+
+- **Type**: Stream cipher (legacy, cryptographically broken)
+- **Key size**: 1-256 bytes
+- **Use case**: Compatibility with existing servers only
+- **Warning**: Do not use for new systems requiring strong security
+
+#### XOR
+
+- **Type**: Simple obfuscation
+- **Key size**: Any length
+- **Use case**: Light obfuscation only, not real security
+
+### IPv6 Support
+
+The library supports IPv6 with "happy eyeballs" algorithm:
+
+```csharp
+var client = new Client("myclient");
+
+// Auto-detect (try IPv6 first, fallback to IPv4)
+client.AddressFamily = AddressFamily.Unspecified;  // default
+client.Connect("example.com", 8080);
+
+// Force IPv4 only
+client.AddressFamily = AddressFamily.InterNetwork;
+client.Connect("example.com", 8080);
+
+// Force IPv6 only
+client.AddressFamily = AddressFamily.InterNetworkV6;
+client.Connect("example.com", 8080);
+```
 
 ## API Reference
 
@@ -182,12 +289,13 @@ Low-level protocol-agnostic client for raw byte communication.
 | `Connecting` | `bool` | Whether a connection attempt is in progress |
 | `Ctag` | `string` | Connection tag (`{client_tag}#{connection_id}`) |
 | `RecvQueueWatermark` | `int` | Number of events pending in the receive queue |
+| `AddressFamily` | `AddressFamily` | IPv4/IPv6 preference (default: Unspecified) |
 | `NoDelay` | `bool` | Disable Nagle's algorithm (default: `true`) |
 | `SendTimeout` | `int` | Send timeout in milliseconds (default: `5000`) |
 
 #### Methods
 
-- `void Connect(string ip, int port)` - Start a connection attempt
+- `void Connect(string host, int port)` - Start a connection attempt (parameter renamed from `ip` to `host`)
 - `void Disconnect()` - Close the connection
 - `bool Send(byte[] data)` - Send raw byte data (max 16KB, length-prefix added)
 - `bool TryGetNextEvent(out Event ev)` - Poll for the next event
@@ -214,6 +322,19 @@ public interface IPacketCodec
 {
     byte[] Encode(uint command, ulong token, byte[] body);
     bool Decode(byte[] data, out uint command, out ulong token, out byte[] body);
+}
+```
+
+### IPacketCipher
+
+Interface for implementing custom encryption.
+
+```csharp
+public interface IPacketCipher
+{
+    byte[] Encrypt(byte[] data);
+    byte[] Decrypt(byte[] data);
+    string Name { get; }
 }
 ```
 
