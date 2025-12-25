@@ -96,8 +96,8 @@ namespace NT.Core.Net
                 _connecting = false;
 
                 // now we connected and the underlied socket is created, set basic options
-                _transport.Client.NoDelay = this.NoDelay;
-                _transport.Client.SendTimeout = this.SendTimeout;
+                _transport.Socket.NoDelay = this.NoDelay;
+                _transport.Socket.SendTimeout = this.SendTimeout;
 
                 // start send thread
                 _sendThread = new Thread(() => { Transport.Send(Ctag, _transport, _sendQueue, _sendDataSignal); });

@@ -16,13 +16,13 @@ namespace NT.Core.Net
     /// </summary>
     public class Transport
     {
-        private TcpClient _client;
-        public TcpClient Client { get => _client; }
+        private TcpClient _socket;
+        public TcpClient Socket { get => _socket; }
         public bool Connected
         {
             get
             {
-                return _client != null && _client.Connected && _client.Client.Connected;
+                return _socket != null && _socket.Connected && _socket.Client.Connected;
             }
         }
 
@@ -39,7 +39,7 @@ namespace NT.Core.Net
         /// </summary>
         protected virtual Stream GetStream()
         {
-            return Client.GetStream();
+            return Socket.GetStream();
         }
 
         /// <summary>
@@ -68,7 +68,7 @@ namespace NT.Core.Net
 
         public Transport()
         {
-            _client = new TcpClient();
+            _socket = new TcpClient();
         }
 
         /// <summary>
@@ -102,7 +102,7 @@ namespace NT.Core.Net
             if (IPAddress.TryParse(host, out IPAddress ip))
             {
                 // Direct IP connection (supports both IPv4 and IPv6 literals)
-                _client.Connect(new IPEndPoint(ip, port));
+                _socket.Connect(new IPEndPoint(ip, port));
             }
             else
             {
@@ -139,12 +139,12 @@ namespace NT.Core.Net
             if (chosen == null)
                 throw new SocketException((int)SocketError.AddressNotAvailable);
 
-            _client.Connect(new IPEndPoint(chosen, port));
+            _socket.Connect(new IPEndPoint(chosen, port));
         }
 
         public void Close()
         {
-            _client.Close();
+            _socket.Close();
         }
 
         internal static bool SendMessage(Stream stream, byte[][] messages)
@@ -287,7 +287,7 @@ namespace NT.Core.Net
             finally
             {
                 stream.Close();
-                transport.Client.Close();
+                transport.Socket.Close();
 
                 recvQueue.Enqueue(new Event(tag, EventType.Disconnected, null));
             }
@@ -306,7 +306,7 @@ namespace NT.Core.Net
 
             try
             {
-                while (transport.Client.Connected)
+                while (transport.Socket.Connected)
                 {
                     // reset the signal
                     mre.Reset();
@@ -333,7 +333,7 @@ namespace NT.Core.Net
                 // When we close the socket in send loop, the receive loop will finally encounter failure
                 // and fire the Disconnected event. Thus we do not need fire the event here.
                 stream.Close();
-                transport.Client.Close();
+                transport.Socket.Close();
             }
         }
     }

@@ -47,7 +47,7 @@ namespace NT.Core.Net
             base.Connect(host, port);
 
             // Get the raw NetworkStream and wrap it with SslStream
-            NetworkStream netStream = Client.GetStream();
+            NetworkStream netStream = Socket.GetStream();
             _sslStream = CreateSslStream(netStream);
 
             // Perform TLS handshake
