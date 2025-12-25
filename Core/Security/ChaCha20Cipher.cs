@@ -2,7 +2,6 @@
 using System;
 using System.Security.Cryptography;
 using System.Text;
-using NT.Core.Net;
 
 namespace NT.Core.Net.Security
 {
@@ -92,7 +91,7 @@ namespace NT.Core.Net.Security
 
         /// <summary>
         /// Encrypts the data using ChaCha20.
-        /// If auto-generating nonce, prepends 12-byte nonce to ciphertext.
+        /// If auto-generating nonce, prepends 12-byte nonce to cipher text.
         /// </summary>
         public byte[] Encrypt(byte[] data)
         {
@@ -105,10 +104,10 @@ namespace NT.Core.Net.Security
                 nonce = new byte[NonceSize];
                 _rng.GetBytes(nonce);
 
-                byte[] ciphertext = Transform(data, nonce, 0);
-                byte[] result = new byte[NonceSize + ciphertext.Length];
+                byte[] cipherText = Transform(data, nonce, 0);
+                byte[] result = new byte[NonceSize + cipherText.Length];
                 Buffer.BlockCopy(nonce, 0, result, 0, NonceSize);
-                Buffer.BlockCopy(ciphertext, 0, result, NonceSize, ciphertext.Length);
+                Buffer.BlockCopy(cipherText, 0, result, NonceSize, cipherText.Length);
                 return result;
             }
             else
@@ -127,26 +126,26 @@ namespace NT.Core.Net.Security
                 throw new ArgumentNullException(nameof(data));
 
             byte[] nonce;
-            byte[] ciphertext;
+            byte[] cipherText;
 
             if (_autoGenerateNonce)
             {
                 if (data.Length < NonceSize)
-                    throw new CryptographicException("Ciphertext too short: missing nonce");
+                    throw new CryptographicException("Cipher text too short: missing nonce");
 
                 nonce = new byte[NonceSize];
                 Buffer.BlockCopy(data, 0, nonce, 0, NonceSize);
 
-                ciphertext = new byte[data.Length - NonceSize];
-                Buffer.BlockCopy(data, NonceSize, ciphertext, 0, ciphertext.Length);
+                cipherText = new byte[data.Length - NonceSize];
+                Buffer.BlockCopy(data, NonceSize, cipherText, 0, cipherText.Length);
             }
             else
             {
                 nonce = _baseNonce;
-                ciphertext = data;
+                cipherText = data;
             }
 
-            return Transform(ciphertext, nonce, 0);
+            return Transform(cipherText, nonce, 0);
         }
 
         /// <summary>
@@ -195,6 +194,7 @@ namespace NT.Core.Net.Security
 
         /// <summary>
         /// Initializes the ChaCha20 state.
+        /// [0-3] = Sigma constant, [4-11] = key, [12] = counter, [13-15] = nonce.
         /// </summary>
         private void InitializeState(uint[] state, byte[] key, byte[] nonce, uint counter)
         {
@@ -241,6 +241,10 @@ namespace NT.Core.Net.Security
             Array.Copy(state, workingState, 16);
 
             // 20 rounds (10 column + 10 diagonal)
+            // [0,   1,  2,  3]
+            // [4,   5,  6,  7]
+            // [8,   9, 10, 11]
+            // [12, 13, 14, 15]
             for (int round = 0; round < 10; round++)
             {
                 // Column rounds

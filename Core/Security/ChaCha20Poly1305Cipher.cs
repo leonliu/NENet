@@ -1,8 +1,7 @@
 #if !UNITY_WEBGL
 using System;
-using System.Text;
 using System.Security.Cryptography;
-using NT.Core.Net;
+using System.Text;
 
 namespace NT.Core.Net.Security
 {
@@ -77,16 +76,16 @@ namespace NT.Core.Net.Security
             byte[] polyKey = GeneratePoly1305Key(_key, nonce);
 
             // Encrypt plaintext using ChaCha20 with counter=1
-            byte[] ciphertext = ChaCha20Encrypt(_key, nonce, 1, data);
+            byte[] cipherText = Transform(_key, nonce, 1, data);
 
             // Calculate authentication tag over ciphertext
-            byte[] tag = Poly1305.ComputeTag(polyKey, ciphertext);
+            byte[] tag = Poly1305.ComputeTag(polyKey, cipherText);
 
             // Format: nonce || ciphertext || tag
-            byte[] result = new byte[NonceSize + ciphertext.Length + TagSize];
+            byte[] result = new byte[NonceSize + cipherText.Length + TagSize];
             Buffer.BlockCopy(nonce, 0, result, 0, NonceSize);
-            Buffer.BlockCopy(ciphertext, 0, result, NonceSize, ciphertext.Length);
-            Buffer.BlockCopy(tag, 0, result, NonceSize + ciphertext.Length, TagSize);
+            Buffer.BlockCopy(cipherText, 0, result, NonceSize, cipherText.Length);
+            Buffer.BlockCopy(tag, 0, result, NonceSize + cipherText.Length, TagSize);
 
             return result;
         }
@@ -108,23 +107,23 @@ namespace NT.Core.Net.Security
             byte[] nonce = new byte[NonceSize];
             Buffer.BlockCopy(data, 0, nonce, 0, NonceSize);
 
-            int ciphertextLen = data.Length - NonceSize - TagSize;
-            byte[] ciphertext = new byte[ciphertextLen];
-            Buffer.BlockCopy(data, NonceSize, ciphertext, 0, ciphertextLen);
+            int cipherTextLen = data.Length - NonceSize - TagSize;
+            byte[] cipherText = new byte[cipherTextLen];
+            Buffer.BlockCopy(data, NonceSize, cipherText, 0, cipherTextLen);
 
             byte[] receivedTag = new byte[TagSize];
-            Buffer.BlockCopy(data, NonceSize + ciphertextLen, receivedTag, 0, TagSize);
+            Buffer.BlockCopy(data, NonceSize + cipherTextLen, receivedTag, 0, TagSize);
 
             // Generate Poly1305 key
             byte[] polyKey = GeneratePoly1305Key(_key, nonce);
 
             // Verify authentication tag (constant-time compare)
-            byte[] computedTag = Poly1305.ComputeTag(polyKey, ciphertext);
+            byte[] computedTag = Poly1305.ComputeTag(polyKey, cipherText);
             if (!CryptographicOperations.FixedTimeEquals(receivedTag, computedTag))
                 throw new CryptographicException("Authentication failed: data may have been tampered with");
 
             // Decrypt ciphertext
-            return ChaCha20Encrypt(_key, nonce, 1, ciphertext);
+            return Transform(_key, nonce, 1, cipherText);
         }
 
         /// <summary>
@@ -132,13 +131,13 @@ namespace NT.Core.Net.Security
         /// </summary>
         private static byte[] GeneratePoly1305Key(byte[] key, byte[] nonce)
         {
-            return ChaCha20Encrypt(key, nonce, 0, new byte[64]);
+            return Transform(key, nonce, 0, new byte[64]);
         }
 
         /// <summary>
         /// ChaCha20 encryption/decryption with specified counter.
         /// </summary>
-        private static byte[] ChaCha20Encrypt(byte[] key, byte[] nonce, uint counter, byte[] input)
+        private static byte[] Transform(byte[] key, byte[] nonce, uint counter, byte[] input)
         {
             byte[] output = new byte[input.Length];
             uint[] state = new uint[16];
@@ -198,15 +197,15 @@ namespace NT.Core.Net.Security
 
             for (int round = 0; round < 10; round++)
             {
-                QuarterRound(ref workingState[0], ref workingState[4], ref workingState[8],  ref workingState[12]);
-                QuarterRound(ref workingState[1], ref workingState[5], ref workingState[9],  ref workingState[13]);
+                QuarterRound(ref workingState[0], ref workingState[4], ref workingState[8], ref workingState[12]);
+                QuarterRound(ref workingState[1], ref workingState[5], ref workingState[9], ref workingState[13]);
                 QuarterRound(ref workingState[2], ref workingState[6], ref workingState[10], ref workingState[14]);
                 QuarterRound(ref workingState[3], ref workingState[7], ref workingState[11], ref workingState[15]);
 
                 QuarterRound(ref workingState[0], ref workingState[5], ref workingState[10], ref workingState[15]);
                 QuarterRound(ref workingState[1], ref workingState[6], ref workingState[11], ref workingState[12]);
-                QuarterRound(ref workingState[2], ref workingState[7], ref workingState[8],  ref workingState[13]);
-                QuarterRound(ref workingState[3], ref workingState[4], ref workingState[9],  ref workingState[14]);
+                QuarterRound(ref workingState[2], ref workingState[7], ref workingState[8], ref workingState[13]);
+                QuarterRound(ref workingState[3], ref workingState[4], ref workingState[9], ref workingState[14]);
             }
 
             for (int i = 0; i < 16; i++)
