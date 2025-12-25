@@ -1,6 +1,6 @@
 # NENet
 
-A lightweight TCP networking library for Unity games/applications with protocol-agnostic transport layer, pluggable codec system, and built-in security layer.
+A lightweight TCP networking library for Unity games/applications with protocol-agnostic transport layer, pluggable codec system, built-in security layer, and TLS/SSL support.
 
 ## Features
 
@@ -10,6 +10,7 @@ A lightweight TCP networking library for Unity games/applications with protocol-
 - **Pluggable codec system** - Easy to implement custom packet protocols via `IPacketCodec`
 - **Built-in NENet protocol** - Efficient big-endian packet format with `NENetPacketCodec`
 - **Security layer** - Production-grade encryption with pluggable ciphers (ChaCha20-Poly1305, ChaCha20, RC4, XOR)
+- **TLS/SSL support** - Transport-layer security with pluggable TLS options (TLS 1.2)
 - **IPv6 support** - Full support for IPv6 with happy eyeballs (IPv6-first, fallback to IPv4)
 - **Connection tagging** - Unique identifiers for multiple connection attempts
 - **Cross-platform** - Works on little-endian and big-endian systems
@@ -25,6 +26,71 @@ A lightweight TCP networking library for Unity games/applications with protocol-
 Copy all `.cs` files from this repository into your Unity project under `Assets/Scripts/NENet/`.
 
 ## Quick Start
+
+### TLS/SSL Secure Connection
+
+```csharp
+using NT.Core.Net;
+
+// Create a client with TLS support
+Client client = new Client("myclient");
+client.TlsOptions = TlsOptions.Default;  // TLS 1.2 with default certificate validation
+
+// Connect with TLS
+client.Connect("example.com", 443);
+
+// Poll for events
+void Update()
+{
+    if (client.TryGetNextEvent(out Event ev))
+    {
+        switch (ev.eventType)
+        {
+            case EventType.Connected:
+                Debug.Log($"TLS Connected: {client.Ctag}");
+                break;
+            case EventType.Data:
+                Debug.Log($"Received: {ev.data.Length} bytes");
+                break;
+            case EventType.Disconnected:
+                Debug.Log($"Disconnected: {client.Ctag}");
+                break;
+        }
+    }
+}
+
+// Send data (encrypted via TLS)
+client.Send(System.Text.Encoding.UTF8.GetBytes("Hello"));
+```
+
+### TLS with Custom Certificate Validation
+
+```csharp
+// Accept self-signed certificates for development
+client.TlsOptions = new TlsOptions {
+    Protocols = SslProtocols.Tls12,
+    CertificateValidator = (sender, cert, chain, errors) => true
+};
+```
+
+### TLS with Mutual Authentication
+
+```csharp
+// Provide client certificate for mutual TLS
+var cert = new X509Certificate2("client.pfx", "password");
+client.TlsOptions = new TlsOptions {
+    ClientCertificate = cert,
+    Protocols = SslProtocols.Tls12
+};
+```
+
+### Plain TCP (Default, Lightweight)
+
+```csharp
+// No TLS options = plain TCP
+Client client = new Client("myclient");
+client.Connect("127.0.0.1", 8080);
+```
 
 ### Using PacketClient with Encryption (Recommended)
 
@@ -157,7 +223,11 @@ PacketClient client = new PacketClient("myclient", new MyCodec());
 │  │  └────────────┘ └────────────┘                         │    │
 │  └─────────────────────────────────────────────────────┘    │
 ├─────────────────────────────────────────────────────────────┤
-│                     Transport (protocol-agnostic)            │
+│                     Transport Layer                          │
+│  ┌──────────────────┐  ┌──────────────────┐                │
+│  │    Transport     │  │ SecureTransport │                │
+│  │   (Plain TCP)    │  │   (TLS/SSL)      │                │
+│  └──────────────────┘  └──────────────────┘                │
 │  - Length-prefix framing: [4-byte length][payload]           │
 │  - Send/Receive threads                                       │
 │  - IPv6 support with happy eyeballs                          │
@@ -244,6 +314,24 @@ var cipher = new ChaCha20Cipher(key32Bytes, nonce12Bytes);
 - **Key size**: Any length
 - **Use case**: Light obfuscation only, not real security
 
+## TLS/SSL Transport Layer
+
+### TlsOptions Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `Protocols` | `SslProtocols` | `Tls12` | TLS protocol version |
+| `CertificateValidator` | `RemoteCertificateValidationCallback` | `null` | Custom certificate validation callback |
+| `ClientCertificate` | `X509Certificate2` | `null` | Client certificate for mutual TLS |
+| `CheckCertificateRevocation` | `bool` | `true` | Whether to check certificate revocation |
+
+### Client Certificate Validation
+
+When providing a `ClientCertificate`, the library validates:
+- Private key is present (required for mutual TLS)
+- Certificate is not expired
+- Certificate is valid (not before date has passed)
+
 ### IPv6 Support
 
 The library supports IPv6 with "happy eyeballs" algorithm:
@@ -266,19 +354,6 @@ client.Connect("example.com", 8080);
 
 ## API Reference
 
-### PacketClient
-
-High-level client with built-in codec support.
-
-| Member | Type | Description |
-|--------|------|-------------|
-| `Codec` | `IPacketCodec` | The codec for encoding/decoding packets |
-
-#### Methods
-
-- `bool SendPacket(uint command, ulong token, byte[] body)` - Encode and send a packet
-- `bool TryGetNextPacket(out uint command, out ulong token, out byte[] body, out EventType eventType)` - Poll and decode next event
-
 ### Client
 
 Low-level protocol-agnostic client for raw byte communication.
@@ -290,6 +365,7 @@ Low-level protocol-agnostic client for raw byte communication.
 | `Ctag` | `string` | Connection tag (`{client_tag}#{connection_id}`) |
 | `RecvQueueWatermark` | `int` | Number of events pending in the receive queue |
 | `AddressFamily` | `AddressFamily` | IPv4/IPv6 preference (default: Unspecified) |
+| `TlsOptions` | `TlsOptions` | TLS/SSL configuration (null = plain TCP) |
 | `NoDelay` | `bool` | Disable Nagle's algorithm (default: `true`) |
 | `SendTimeout` | `int` | Send timeout in milliseconds (default: `5000`) |
 
@@ -338,12 +414,28 @@ public interface IPacketCipher
 }
 ```
 
+### TlsOptions
+
+Configuration for TLS/SSL connections.
+
+```csharp
+public class TlsOptions
+{
+    public SslProtocols Protocols { get; set; } = SslProtocols.Tls12;
+    public RemoteCertificateValidationCallback CertificateValidator { get; set; }
+    public X509Certificate2 ClientCertificate { get; set; }
+    public bool CheckCertificateRevocation { get; set; } = true;
+    public static TlsOptions Default => new TlsOptions();
+}
+```
+
 ### Transport (Internal)
 
 Low-level TCP transport with length-prefix framing.
 
 | Static Member | Type | Default | Description |
 |---------------|------|---------|-------------|
+| `Create(TlsOptions, AddressFamily)` | `static Transport` | - | Factory method for creating transport instances |
 | `RecvQueueWarningLevel` | `int` | 1000 | Log warning if queue exceeds this |
 | `MaxMessageSize` | `int` | 16KB | Maximum message size allowed |
 
