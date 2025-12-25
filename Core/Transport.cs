@@ -1,6 +1,7 @@
 #if !UNITY_WEBGL
 using System;
 using System.Collections.Concurrent;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -33,6 +34,15 @@ namespace NT.Core.Net
         public static int RecvQueueWarningLevel = 1000;
 
         /// <summary>
+        /// Gets the stream for this transport. Can be overridden by subclasses
+        /// to provide a wrapped stream (e.g., SslStream for TLS).
+        /// </summary>
+        protected virtual Stream GetStream()
+        {
+            return Client.GetStream();
+        }
+
+        /// <summary>
         /// Maximum message size allowed, 16KB should be enough.
         /// </summary>
         public static int MaxMessageSize = 16 * 1024;
@@ -59,6 +69,27 @@ namespace NT.Core.Net
         public Transport()
         {
             _client = new TcpClient();
+        }
+
+        /// <summary>
+        /// Factory method to create the appropriate transport based on TLS options.
+        /// </summary>
+        /// <param name="tlsOptions">TLS options for secure connections, or null for plain TCP.</param>
+        /// <param name="addressFamily">Preferred address family for connections.</param>
+        /// <returns>A Transport instance (either Transport or SecureTransport).</returns>
+        public static Transport Create(TlsOptions tlsOptions, AddressFamily addressFamily)
+        {
+            Transport transport;
+            if (tlsOptions != null)
+            {
+                transport = new SecureTransport(tlsOptions);
+            }
+            else
+            {
+                transport = new Transport();
+            }
+            transport.AddressFamily = addressFamily;
+            return transport;
         }
 
         /// <summary>
@@ -116,7 +147,7 @@ namespace NT.Core.Net
             _client.Close();
         }
 
-        static bool SendMessage(NetworkStream stream, byte[][] messages)
+        internal static bool SendMessage(Stream stream, byte[][] messages)
         {
             try
             {
@@ -137,7 +168,7 @@ namespace NT.Core.Net
             }
         }
 
-        static void SendMessageBatch(NetworkStream stream, byte[][] messages, ref int startIndex)
+        internal static void SendMessageBatch(Stream stream, byte[][] messages, ref int startIndex)
         {
             // calculate how many messages we can fit in this batch
             int totalSize = 0;
@@ -186,7 +217,7 @@ namespace NT.Core.Net
             startIndex = endIndex;
         }
 
-        static bool ReceiveMessage(NetworkStream stream, out byte[] data)
+        internal static bool ReceiveMessage(Stream stream, out byte[] data)
         {
             data = null;
 
@@ -219,11 +250,11 @@ namespace NT.Core.Net
         /// Uses length-prefix protocol: [4-byte length][payload]
         /// </summary>
         /// <param name="tag">Connection tag for logging and event tagging.</param>
-        /// <param name="client">The TCP client.</param>
+        /// <param name="transport">The transport instance.</param>
         /// <param name="recvQueue">Queue to enqueue received events.</param>
-        public static void Receive(string tag, TcpClient client, ConcurrentQueue<Event> recvQueue)
+        public static void Receive(string tag, Transport transport, ConcurrentQueue<Event> recvQueue)
         {
-            NetworkStream stream = client.GetStream();
+            Stream stream = transport.GetStream();
             DateTime lastWarnTime = DateTime.Now;
 
             try
@@ -256,7 +287,7 @@ namespace NT.Core.Net
             finally
             {
                 stream.Close();
-                client.Close();
+                transport.Client.Close();
 
                 recvQueue.Enqueue(new Event(tag, EventType.Disconnected, null));
             }
@@ -266,16 +297,16 @@ namespace NT.Core.Net
         /// Send thread procedure. Sends messages from the send queue to the server.
         /// </summary>
         /// <param name="tag">Connection tag for logging.</param>
-        /// <param name="client">The TCP client.</param>
+        /// <param name="transport">The transport instance.</param>
         /// <param name="sendQueue">Queue containing messages to send.</param>
         /// <param name="mre">Signal to wake the send thread when data is available.</param>
-        public static void Send(string tag, TcpClient client, SafeQueue<byte[]> sendQueue, ManualResetEvent mre)
+        public static void Send(string tag, Transport transport, SafeQueue<byte[]> sendQueue, ManualResetEvent mre)
         {
-            NetworkStream stream = client.GetStream();
+            Stream stream = transport.GetStream();
 
             try
             {
-                while (client.Connected)
+                while (transport.Client.Connected)
                 {
                     // reset the signal
                     mre.Reset();
@@ -302,7 +333,7 @@ namespace NT.Core.Net
                 // When we close the socket in send loop, the receive loop will finally encounter failure
                 // and fire the Disconnected event. Thus we do not need fire the event here.
                 stream.Close();
-                client.Close();
+                transport.Client.Close();
             }
         }
     }

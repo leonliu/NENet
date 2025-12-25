@@ -54,6 +54,11 @@ namespace NT.Core.Net
         /// </summary>
         public AddressFamily AddressFamily { get; set; } = AddressFamily.Unspecified;
 
+        /// <summary>
+        /// TLS/SSL options for secure connections. If null, uses plain TCP.
+        /// </summary>
+        public TlsOptions TlsOptions { get; set; }
+
         private Transport _transport;
 
         // tag of the client
@@ -95,12 +100,12 @@ namespace NT.Core.Net
                 _transport.Client.SendTimeout = this.SendTimeout;
 
                 // start send thread
-                _sendThread = new Thread(() => { Transport.Send(Ctag, _transport.Client, _sendQueue, _sendDataSignal); });
+                _sendThread = new Thread(() => { Transport.Send(Ctag, _transport, _sendQueue, _sendDataSignal); });
                 _sendThread.IsBackground = true;
                 _sendThread.Start();
 
                 // start receive loop
-                Transport.Receive(Ctag, _transport.Client, _recvQueue);
+                Transport.Receive(Ctag, _transport, _recvQueue);
             }
             catch (SocketException e)
             {
@@ -153,7 +158,9 @@ namespace NT.Core.Net
             }
 
             _connecting = true;
-            _transport = new Transport { AddressFamily = this.AddressFamily };
+
+            // Create transport using factory method
+            _transport = Transport.Create(TlsOptions, AddressFamily);
 
             // drain any leftover events from previous connection
             int leftoverCount = 0;

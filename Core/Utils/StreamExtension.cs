@@ -1,15 +1,17 @@
-﻿#if !UNITY_WEBGL
+#if !UNITY_WEBGL
 using System.IO;
-using System.Net.Sockets;
 
 namespace NT.Core.Net
 {
-    public static class NetworkStreamExtension
+    /// <summary>
+    /// Extension methods for Stream operations.
+    /// </summary>
+    public static class StreamExtension
     {
         /// <summary>
-        /// A handy version of NetworkStream.Read method. .Read method returns 0 if remote closed
+        /// A handy version of Stream.Read method. .Read method returns 0 if remote closed
         /// the connection but throws an IOException if client closed its connection voluntarily.
-        /// ReadSafely returns 0 for both cases so caller does not have to worry about the 
+        /// ReadSafely returns 0 for both cases so caller does not have to worry about the
         /// IOException since the disconnect is by intention.
         /// </summary>
         /// <param name="stream"></param>
@@ -17,7 +19,7 @@ namespace NT.Core.Net
         /// <param name="offset"></param>
         /// <param name="size"></param>
         /// <returns></returns>
-        public static int ReadSafely(this NetworkStream stream, byte[] buffer, int offset, int size)
+        public static int ReadSafely(this Stream stream, byte[] buffer, int offset, int size)
         {
             try
             {
@@ -31,14 +33,14 @@ namespace NT.Core.Net
 
         /// <summary>
         /// Read exactly 'amount' bytes.
-        /// NetworkStream.Read reads up to 'amount' bytes. This method is blocking until
+        /// Stream.Read reads up to 'amount' bytes. This method is blocking until
         /// 'amount' bytes were received.
         /// </summary>
         /// <param name="stream"></param>
         /// <param name="buffer"></param>
         /// <param name="amount"></param>
         /// <returns>true if 'amount' bytes are read, false if connection is closed</returns>
-        public static bool ReadExactly(this NetworkStream stream, byte[] buffer, int amount)
+        public static bool ReadExactly(this Stream stream, byte[] buffer, int amount)
         {
             int bytesRead = 0;
             while (bytesRead < amount)
