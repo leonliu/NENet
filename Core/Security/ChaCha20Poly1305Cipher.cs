@@ -255,11 +255,11 @@ namespace NT.Core.Net.Security
 
         /// <summary>
         /// Poly1305 message authentication code (RFC 7539).
+        /// Implementation based on OpenSSL's 32-bit reference implementation.
+        /// Uses 4 x 32-bit limbs for r and 5 x 32-bit limbs for accumulator h.
         /// </summary>
         private static class Poly1305
         {
-            private const int TagSize = 16;
-
             /// <summary>
             /// Computes the Poly1305 authentication tag for the given message.
             /// </summary>
@@ -268,150 +268,132 @@ namespace NT.Core.Net.Security
                 if (key == null || key.Length != 32)
                     throw new ArgumentException("Poly1305 key must be 32 bytes", nameof(key));
 
-                // Clamp the key
-                ulong[] r = new ulong[3]; // 26-bit limbs
-                ulong k0 = Utils.ToUInt64LittleEndian(key, 0);
-                ulong k1 = Utils.ToUInt64LittleEndian(key, 8);
-                ulong k2 = Utils.ToUInt64LittleEndian(key, 16);
+                // Key clamping (RFC 7539 Section 2.5.1)
+                // r &= 0xffffffc0ffffffc0ffffffc0fffffff
+                uint r0 = Utils.ToUInt32LittleEndian(key, 0) & 0x0fffffff;
+                uint r1 = Utils.ToUInt32LittleEndian(key, 4) & 0x0ffffffc;
+                uint r2 = Utils.ToUInt32LittleEndian(key, 8) & 0x0ffffffc;
+                uint r3 = Utils.ToUInt32LittleEndian(key, 12) & 0x0ffffffc;
 
-                // Key clamping: clear certain bits
-                r[0] = (k0 & 0x0FFFFFFC0FFFFFFF); // bits [2..25] of k0
-                r[1] = (k0 >> 44) | ((k1 & 0x0FFFFFFFFFFFF) << 20); // bits [6..25] of k1
-                r[2] = (k1 >> 24) | ((k2 & 0x0FFF) << 40); // bits [6..25] of k2
+                // Pre-compute r[i] * 5/4 for the reduction trick
+                // Since bottom 2 bits of r1, r2, r3 are cleared, r[i] >> 2 loses no info
+                uint s1 = r1 + (r1 >> 2);  // r1 * (1 + 1/4) = r1 * 5/4
+                uint s2 = r2 + (r2 >> 2);
+                uint s3 = r3 + (r3 >> 2);
 
-                // Initial accumulator (message is padded to 16-byte blocks)
-                ulong[] h = new ulong[3] { 0, 0, 0 };
-                ulong[] c = new ulong[3];
+                // Initial accumulator h (5 x 32-bit words to handle overflow)
+                uint h0 = 0, h1 = 0, h2 = 0, h3 = 0, h4 = 0;
 
                 // Process message in 16-byte blocks
-                int remaining = message.Length;
-                int offset = 0;
-
-                while (remaining > 0)
+                for (int offset = 0; offset < message.Length; offset += 16)
                 {
-                    // Load block (padded with 0x01 byte at the end)
-                    ulong block0, block1, block2;
+                    // h += m[i] (load 16-byte block)
+                    ulong d0, d1, d2, d3;
+                    uint padbit = 1;
 
-                    if (remaining >= 16)
+                    if (offset + 16 <= message.Length)
                     {
-                        // Full block: read 16 bytes, append 1 byte
-                        block0 = Utils.ToUInt64LittleEndian(message, offset);
-                        block1 = Utils.ToUInt64LittleEndian(message, offset + 8);
-                        block2 = 1;
-                        remaining -= 16;
-                        offset += 16;
+                        // Full block
+                        d0 = (ulong)h0 + Utils.ToUInt32LittleEndian(message, offset + 0);
+                        d1 = (ulong)h1 + (d0 >> 32) + Utils.ToUInt32LittleEndian(message, offset + 4);
+                        d2 = (ulong)h2 + (d1 >> 32) + Utils.ToUInt32LittleEndian(message, offset + 8);
+                        d3 = (ulong)h3 + (d2 >> 32) + Utils.ToUInt32LittleEndian(message, offset + 12);
+                        h4 = (uint)(d3 >> 32) + padbit;
                     }
                     else
                     {
-                        // Partial block: read remaining bytes, pad with 0x01, then zeros
+                        // Partial block: pad with 0x01 byte, then zeros
                         byte[] padded = new byte[16];
+                        int remaining = message.Length - offset;
                         Buffer.BlockCopy(message, offset, padded, 0, remaining);
                         padded[remaining] = 1;
-                        block0 = Utils.ToUInt64LittleEndian(padded, 0);
-                        block1 = Utils.ToUInt64LittleEndian(padded, 8);
-                        block2 = 1;
-                        remaining = 0; // Last block
+
+                        d0 = (ulong)h0 + Utils.ToUInt32LittleEndian(padded, 0);
+                        d1 = (ulong)h1 + (d0 >> 32) + Utils.ToUInt32LittleEndian(padded, 4);
+                        d2 = (ulong)h2 + (d1 >> 32) + Utils.ToUInt32LittleEndian(padded, 8);
+                        d3 = (ulong)h3 + (d2 >> 32) + Utils.ToUInt32LittleEndian(padded, 12);
+                        h4 = (uint)(d3 >> 32) + 1;  // padbit = 1 for partial block too
                     }
 
-                    // h = (h + c) * r mod p
-                    c[0] = block0 & 0x3FFFFFF; // 26 bits
-                    c[1] = ((block0 >> 26) | (block1 << 38)) & 0x3FFFFFF;
-                    c[2] = ((block1 >> 14) | (block2 << 50)) & 0x3FFFFFF;
+                    h0 = (uint)d0;
+                    h1 = (uint)d1;
+                    h2 = (uint)d2;
+                    h3 = (uint)d3;
 
-                    // Add c to h
-                    h[0] += c[0];
-                    h[1] += c[1];
-                    h[2] += c[2];
+                    // h *= r "%" p (partial remainder, using OpenSSL's formula)
+                    d0 = ((ulong)h0 * r0) + ((ulong)h1 * s3) + ((ulong)h2 * s2) + ((ulong)h3 * s1);
+                    d1 = ((ulong)h0 * r1) + ((ulong)h1 * r0) + ((ulong)h2 * s3) + ((ulong)h3 * s2) + ((ulong)h4 * s1);
+                    d2 = ((ulong)h0 * r2) + ((ulong)h1 * r1) + ((ulong)h2 * r0) + ((ulong)h3 * s3) + ((ulong)h4 * s2);
+                    d3 = ((ulong)h0 * r3) + ((ulong)h1 * r2) + ((ulong)h2 * r1) + ((ulong)h3 * r0) + ((ulong)h4 * s3);
+                    h4 = h4 * r0;
 
-                    // Multiply by r (mod p = 2^130 - 5)
-                    ulong t0 = h[0] * r[0];
-                    ulong t1 = h[0] * r[1] + h[1] * r[0];
-                    ulong t2 = h[0] * r[2] + h[1] * r[1] + h[2] * r[0];
-                    ulong t3 = h[1] * r[2] + h[2] * r[1];
-                    ulong t4 = h[2] * r[2];
+                    // Carry propagation
+                    h0 = (uint)d0;
+                    h1 = (uint)(d1 += d0 >> 32);
+                    h2 = (uint)(d2 += d1 >> 32);
+                    h3 = (uint)(d3 += d2 >> 32);
+                    h4 += (uint)(d3 >> 32);
 
-                    // Reduce mod 2^130 - 5 (where p = 2^130 - 5)
-                    // First carry propagation from multiplication
-                    ulong carry0 = t0 >> 26; t0 &= 0x3FFFFFF;
-                    t1 += carry0;
-                    ulong carry1 = t1 >> 26; t1 &= 0x3FFFFFF;
-                    t2 += carry1;
-                    ulong carry2 = t2 >> 26; t2 &= 0x3FFFFFF;
-                    t3 += carry2;
-                    ulong carry3 = t3 >> 26; t3 &= 0x3FFFFFF;
-                    t4 += carry3;
+                    // Partial reduction: (h4:h0 += (h4:h0>>130) * 5) %= 2^130
+                    // Shifting by 4 limbs = 128 bits, then 2 more bits for total 130
+                    // c = (h4 >> 2) * 5 + (h4 & 3) recovers the lost 2 bits and multiplies by 5
+                    uint c = (h4 >> 2) + (h4 & ~3U);
+                    h4 &= 3;
 
-                    // t4 represents overflow beyond 130 bits
-                    // Since p = 2^130 - 5, we add t4 * 5 (equivalent to subtracting t4 * p)
-                    t4 *= 5;
-                    h[0] = t0 + t4;
-
-                    // Second carry propagation after adding t4*5
-                    carry0 = h[0] >> 26; h[0] &= 0x3FFFFFF;
-                    h[1] = t1 + carry0;
-                    carry1 = h[1] >> 26; h[1] &= 0x3FFFFFF;
-                    h[2] = t2 + carry1;
-
-                    // Final conditional subtraction of p = 2^130 - 5
-                    // Compute h = h[0] + h[1]*2^26 + h[2]*2^52
-                    // Check if h >= 2^130 - 5
-                    // Since h is stored in 26-bit limbs, we check:
-                    // h[2]*2^52 + h[1]*2^26 + h[0] >= 2^130 - 5
-
-                    // This is equivalent to checking if h >= p where p = 2^130 - 5
-                    // We can check this by seeing if subtracting p would underflow
-                    // Or equivalently, if (h + 5) >= 2^130
-
-                    // A simpler check: if any of the top bits indicate value >= p
-                    // The value fits in 130 bits: 26 + 26 + 26 = 78 bits for main value
-                    // But we need to check if we're at or above p = 2^130 - 5
-
-                    // Proper check: if (h[2] >= 0x03FFFFFF || (h[2] == 0x03FFFFFE && ...))
-                    // Actually, since we allow values slightly above p, we need to compare:
-                    // If h >= 2^130 - 5, subtract p (add 5 and propagate)
-
-                    // The carry propagation above ensures h[0], h[1] are in [0, 2^26-1]
-                    // But h[2] might be >= 2^26 or the value might be >= p
-
-                    // Check: is h + 5 >= 2^130?
-                    // h + 5 >= 2^130 iff h >= 2^130 - 5 = p
-                    // We compute this by checking if adding 5 causes an overflow beyond 130 bits
-
-                    ulong tmp0 = h[0] + 5;
-                    ulong tmp1 = h[1];
-                    ulong tmp2 = h[2];
-
-                    // Propagate carry from adding 5
-                    tmp1 += tmp0 >> 26; tmp0 &= 0x3FFFFFF;
-                    tmp2 += tmp1 >> 26; tmp1 &= 0x3FFFFFF;
-
-                    // If tmp2 has bit 26 set, then h + 5 >= 2^130, so h >= p
-                    if (tmp2 >> 26 != 0)
-                    {
-                        // Subtract p by adding 5 (since p = 2^130 - 5, so -p = +5 - 2^130)
-                        // The -2^130 part is handled by simply discarding the overflow bit
-                        h[0] = (uint)tmp0;
-                        h[1] = (uint)tmp1;
-                        h[2] = tmp2 & 0x3FFFFFF;
-                    }
+                    h0 += c;
+                    h1 += (c = ConstantTimeCarry(h0, c));
+                    h2 += (c = ConstantTimeCarry(h1, c));
+                    h3 += ConstantTimeCarry(h2, c);
                 }
 
-                // Convert to 16-byte tag
-                // First add the s-part (key bytes 16-31)
-                ulong s0 = Utils.ToUInt64LittleEndian(key, 16);
-                ulong s1 = Utils.ToUInt64LittleEndian(key, 24);
+                // Final reduction: compare to modulus p = 2^130 - 5
+                // Compute g = h + (-p mod 2^130) = h + 5
+                uint g0 = (uint)((ulong)h0 + 5);
+                uint g1 = (uint)((ulong)h1 + ((ulong)h0 + 5 >> 32));
+                uint g2 = (uint)((ulong)h2 + ((ulong)h1 + ((ulong)h0 + 5 >> 32) >> 32));
+                uint g3 = (uint)((ulong)h3 + ((ulong)h2 + ((ulong)h1 + ((ulong)h0 + 5 >> 32) >> 32) >> 32));
+                uint g4 = h4 + (uint)((ulong)h3 + ((ulong)h2 + ((ulong)h1 + ((ulong)h0 + 5 >> 32) >> 32) >> 32) >> 32);
 
-                ulong tag0 = h[0] | (h[1] << 26);
-                ulong tag1 = (h[1] >> 38) | (h[2] << 14);
+                // Constant-time conditional: if g4 >> 2 (carry into 131st bit), use g, else use h
+                uint mask = 0 - (g4 >> 2);
+                g0 &= mask;
+                g1 &= mask;
+                g2 &= mask;
+                g3 &= mask;
+                mask = ~mask;
+                h0 = (h0 & mask) | g0;
+                h1 = (h1 & mask) | g1;
+                h2 = (h2 & mask) | g2;
+                h3 = (h3 & mask) | g3;
 
-                tag0 += s0;
-                tag1 += s1 + (tag0 < s0 ? 1UL : 0); // Add carry
+                // mac = (h + nonce) % 2^128 (nonce is key bytes 16-31)
+                ulong t;
+                uint n0 = Utils.ToUInt32LittleEndian(key, 16);
+                uint n1 = Utils.ToUInt32LittleEndian(key, 20);
+                uint n2 = Utils.ToUInt32LittleEndian(key, 24);
+                uint n3 = Utils.ToUInt32LittleEndian(key, 28);
+
+                h0 = (uint)(t = (ulong)h0 + n0);
+                h1 = (uint)(t = (ulong)h1 + (t >> 32) + n1);
+                h2 = (uint)(t = (ulong)h2 + (t >> 32) + n2);
+                h3 = (uint)(t = (ulong)h3 + (t >> 32) + n3);
 
                 byte[] tag = new byte[16];
-                Array.Copy(Utils.GetBytesLittleEndian(tag0), tag, 8);
-                Array.Copy(Utils.GetBytesLittleEndian(tag1), 0, tag, 8, 8);
+                Buffer.BlockCopy(Utils.GetBytesLittleEndian(h0), 0, tag, 0, 4);
+                Buffer.BlockCopy(Utils.GetBytesLittleEndian(h1), 0, tag, 4, 4);
+                Buffer.BlockCopy(Utils.GetBytesLittleEndian(h2), 0, tag, 8, 4);
+                Buffer.BlockCopy(Utils.GetBytesLittleEndian(h3), 0, tag, 12, 4);
 
                 return tag;
+            }
+
+            /// <summary>
+            /// Constant-time carry detection: returns 1 if a less than b (carry occurred), else 0.
+            /// Uses bitwise operations to avoid branching.
+            /// </summary>
+            private static uint ConstantTimeCarry(uint a, uint b)
+            {
+                return (a ^ ((a ^ b) | ((a - b) ^ b))) >> 31;
             }
         }
     }
