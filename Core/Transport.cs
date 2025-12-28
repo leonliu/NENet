@@ -34,6 +34,12 @@ namespace NT.Core.Net
         public static int RecvQueueWarningLevel = 1000;
 
         /// <summary>
+        /// Maximum receive queue size. When exceeded, packets will be dropped
+        /// to prevent unbounded memory growth. Default: 10000 events.
+        /// </summary>
+        public static int MaxRecvQueueSize = 10000;
+
+        /// <summary>
         /// Gets the stream for this transport. Can be overridden by subclasses
         /// to provide a wrapped stream (e.g., SslStream for TLS).
         /// </summary>
@@ -252,7 +258,8 @@ namespace NT.Core.Net
         /// <param name="tag">Connection tag for logging and event tagging.</param>
         /// <param name="transport">The transport instance.</param>
         /// <param name="recvQueue">Queue to enqueue received events.</param>
-        public static void Receive(string tag, Transport transport, ConcurrentQueue<Event> recvQueue)
+        /// <param name="cancellationToken">Token to signal cancellation.</param>
+        public static void Receive(string tag, Transport transport, ConcurrentQueue<Event> recvQueue, CancellationToken cancellationToken)
         {
             Stream stream = transport.GetStream();
             DateTime lastWarnTime = DateTime.Now;
@@ -260,11 +267,18 @@ namespace NT.Core.Net
             try
             {
                 recvQueue.Enqueue(new Event(tag, EventType.Connected, null));
-                while (true)
+                while (!cancellationToken.IsCancellationRequested)
                 {
                     byte[] data;
                     if (!ReceiveMessage(stream, out data))
                         break;
+
+                    // Drop packet if queue is at maximum size to prevent unbounded memory growth
+                    if (recvQueue.Count >= MaxRecvQueueSize)
+                    {
+                        Debug.LogError($"[Transport] Receive queue full ({recvQueue.Count}), dropping packet to prevent memory exhaustion");
+                        continue;
+                    }
 
                     recvQueue.Enqueue(new Event(tag, EventType.Data, data));
                     if (recvQueue.Count > RecvQueueWarningLevel)
@@ -278,10 +292,14 @@ namespace NT.Core.Net
                     }
                 }
             }
+            catch (OperationCanceledException)
+            {
+                // Expected during disconnect - stop gracefully
+                Debug.LogWarning($"[Transport] Receive proc cancelled! tag={tag}");
+            }
             catch (Exception e)
             {
-                // something wrong happens, the thread was interrupted or remote closed
-                // the connection or we closed it. Stop gracefully.
+                // remote closed the connection or we closed it
                 Debug.LogWarning($"[Transport] Receive proc finished! tag={tag}, reason={e}");
             }
             finally
@@ -300,13 +318,14 @@ namespace NT.Core.Net
         /// <param name="transport">The transport instance.</param>
         /// <param name="sendQueue">Queue containing messages to send.</param>
         /// <param name="mre">Signal to wake the send thread when data is available.</param>
-        public static void Send(string tag, Transport transport, SafeQueue<byte[]> sendQueue, ManualResetEvent mre)
+        /// <param name="cancellationToken">Token to signal cancellation.</param>
+        public static void Send(string tag, Transport transport, SafeQueue<byte[]> sendQueue, ManualResetEvent mre, CancellationToken cancellationToken)
         {
             Stream stream = transport.GetStream();
 
             try
             {
-                while (transport.Socket.Connected)
+                while (transport.Socket.Connected && !cancellationToken.IsCancellationRequested)
                 {
                     // reset the signal
                     mre.Reset();
@@ -318,13 +337,18 @@ namespace NT.Core.Net
                             break;
                     }
 
-                    // wait for more data blockingly
-                    mre.WaitOne();
+                    // wait for more data blockingly, or until cancellation is requested
+                    WaitHandle.WaitAny(new WaitHandle[] { mre, cancellationToken.WaitHandle });
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected during disconnect - stop gracefully
+                Debug.LogWarning($"[Transport] Send proc cancelled! tag={tag}");
             }
             catch (Exception e)
             {
-                // Exceptions happen when thread is stopped, interrupted or connection is closed by either
+                // Exceptions happen when thread is stopped or connection is closed by either
                 // local or remote. Stop and cleanup gracefully
                 Debug.LogWarning($"[Transport] Send proc finished! tag={tag}, reason={e}");
             }

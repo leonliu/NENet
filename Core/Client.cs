@@ -26,7 +26,7 @@ namespace NT.Core.Net
         /// Client is attempting to establish a connection but not finish yet.
         /// </summary>
         /// <value></value>
-        public bool Connecting { get => _connecting; }
+        public bool Connecting { get => _connecting == 1; }
         /// <summary>
         /// Connection tag composed of client tag and connection id.
         /// </summary>
@@ -68,10 +68,11 @@ namespace NT.Core.Net
         private int _cid;
         private Thread _recvThread;
         private Thread _sendThread;
-        private volatile bool _connecting;
+        private int _connecting;  // 0 = not connecting, 1 = connecting (use Interlocked for thread-safety)
         private SafeQueue<byte[]> _sendQueue = new SafeQueue<byte[]>();
         private ConcurrentQueue<Event> _recvQueue = new ConcurrentQueue<Event>();
         ManualResetEvent _sendDataSignal = new ManualResetEvent(false);
+        private CancellationTokenSource _cts;
 
         public Client(string tag)
         {
@@ -93,19 +94,19 @@ namespace NT.Core.Net
             {
                 // this is a blocking call
                 _transport.Connect(ip, port);
-                _connecting = false;
+                Interlocked.Exchange(ref _connecting, 0);
 
                 // now we connected and the underlied socket is created, set basic options
                 _transport.Socket.NoDelay = this.NoDelay;
                 _transport.Socket.SendTimeout = this.SendTimeout;
 
                 // start send thread
-                _sendThread = new Thread(() => { Transport.Send(Ctag, _transport, _sendQueue, _sendDataSignal); });
+                _sendThread = new Thread(() => { Transport.Send(Ctag, _transport, _sendQueue, _sendDataSignal, _cts.Token); });
                 _sendThread.IsBackground = true;
                 _sendThread.Start();
 
                 // start receive loop
-                Transport.Receive(Ctag, _transport, _recvQueue);
+                Transport.Receive(Ctag, _transport, _recvQueue, _cts.Token);
             }
             catch (SocketException e)
             {
@@ -113,19 +114,21 @@ namespace NT.Core.Net
                 Debug.LogWarning($"[Client] connection failed: tag={Ctag}, reason={e}");
                 _recvQueue.Enqueue(new Event(Ctag, EventType.Disconnected, null));
             }
+            catch (OperationCanceledException)
+            {
+                // Expected during disconnect - ignore
+            }
             catch (Exception e)
             {
-                // the thread maybe interrupted or aborted by disconnect, this is expected as a result
-                // of user request. for other type of exceptions, there is really something seriously
-                // wrong happened. Anyway we take a log here.
+                // other unexpected exceptions
                 Debug.LogWarning($"[Client] receive exception: tag={Ctag}, exception={e}");
             }
 
             // we may be here as connecting failed or connection closed or other exceptions happened
-            if (_sendThread != null && _sendThread.IsAlive) _sendThread.Interrupt();
+            // cleanup is handled by Disconnect() and the finally blocks in Transport methods
 
             // reset connecting state since the setting above may not have chance to execute in case of connect fail
-            _connecting = false;
+            Interlocked.Exchange(ref _connecting, 0);
 
             // cleanup in case of connect fail
             if (_transport != null) _transport.Close();
@@ -151,13 +154,19 @@ namespace NT.Core.Net
             if (string.IsNullOrEmpty(host))
                 throw new ArgumentException("Host cannot be null or empty", nameof(host));
 
-            if (Connecting || Connected)
+            // Atomically transition from not connecting (0) to connecting (1)
+            // If already connecting (1) or any other value, fail
+            int previousValue = Interlocked.CompareExchange(ref _connecting, 1, 0);
+            if (previousValue != 0 || Connected)
             {
                 Debug.Log($"[Client] Connect >> already connecting or connected");
+                // Reset to 0 if we changed it to 1 but we're actually connected
+                if (previousValue == 0 && Connected)
+                    Interlocked.Exchange(ref _connecting, 0);
                 return;
             }
 
-            _connecting = true;
+            _cts = new CancellationTokenSource();
 
             // Create transport using factory method
             _transport = Transport.Create(TlsOptions, AddressFamily);
@@ -186,12 +195,12 @@ namespace NT.Core.Net
         {
             if (Connecting || Connected)
             {
+                // Signal cancellation to threads
+                _cts?.Cancel();
+
                 _transport.Close();
 
-                // wait until thread finished.
-                if (_recvThread != null) _recvThread.Interrupt();
-
-                _connecting = false;
+                Interlocked.Exchange(ref _connecting, 0);
                 _sendQueue.Clear();
 
                 // drain receive queue to prevent memory leak of unprocessed packets
@@ -202,6 +211,10 @@ namespace NT.Core.Net
                 // dispose and recreate the signal for next connection
                 _sendDataSignal?.Dispose();
                 _sendDataSignal = new ManualResetEvent(false);
+
+                // dispose cancellation token source
+                _cts?.Dispose();
+                _cts = null;
             }
         }
 
