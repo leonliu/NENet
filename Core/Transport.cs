@@ -29,19 +29,6 @@ namespace NT.Core.Net
         }
 
         /// <summary>
-        /// Alert is set if receive queue size exceeds this value. It is an
-        /// indication that the received messages have not been processed in
-        /// time.
-        /// </summary>
-        public static int RecvQueueWarningLevel = 1000;
-
-        /// <summary>
-        /// Maximum receive queue size. When exceeded, packets will be dropped
-        /// to prevent unbounded memory growth. Default: 10000 events.
-        /// </summary>
-        public static int MaxRecvQueueSize = 10000;
-
-        /// <summary>
         /// Gets the stream for this transport. Can be overridden by subclasses
         /// to provide a wrapped stream (e.g., SslStream for TLS).
         /// </summary>
@@ -49,23 +36,6 @@ namespace NT.Core.Net
         {
             return Socket.GetStream();
         }
-
-        /// <summary>
-        /// Maximum message size allowed, 16KB should be enough.
-        /// </summary>
-        public static int MaxMessageSize = 16 * 1024;
-
-        /// <summary>
-        /// Maximum send buffer size for message combining, 64KB should be enough.
-        /// </summary>
-        private const int MaxSendBufferSize = 64 * 1024;
-
-        /// <summary>
-        /// Maximum size for ThreadStatic send buffer. If a single batch exceeds this,
-        /// we allocate a temporary buffer instead of growing the ThreadStatic one.
-        /// This prevents unbounded memory growth in long-lived threads.
-        /// </summary>
-        private const int MaxThreadStaticBufferSize = 64 * 1024;
 
         /// <summary>
         /// Preferred address family for connections. Unspecified = try IPv6 first, fallback to IPv4.
@@ -162,7 +132,133 @@ namespace NT.Core.Net
             _socket.Close();
         }
 
-        internal static bool SendMessage(Stream stream, List<byte[]> messages)
+        /// <summary>
+        /// Receive loop. This method blocks until the connection is closed or cancelled.
+        /// </summary>
+        /// <param name="tag">Connection tag for logging and event tagging.</param>
+        /// <param name="recvQueue">Queue to enqueue received events.</param>
+        /// <param name="cancellationToken">Token to signal cancellation.</param>
+        public void Receive(string tag, ConcurrentQueue<Event> recvQueue, CancellationToken cancellationToken)
+        {
+            Stream stream = GetStream();
+            DateTime lastWarnTime = DateTime.Now;
+
+            try
+            {
+                recvQueue.Enqueue(new Event(tag, EventType.Connected, null));
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    byte[] data;
+                    if (!ReceiveMessage(stream, out data))
+                        break;
+
+                    // Drop packet if queue is at maximum size to prevent unbounded memory growth
+                    if (recvQueue.Count >= NetworkConfig.MaxRecvQueueSize)
+                    {
+                        Debug.LogError($"[Transport] Receive queue full ({recvQueue.Count}), dropping packet to prevent memory exhaustion");
+                        continue;
+                    }
+
+                    recvQueue.Enqueue(new Event(tag, EventType.Data, data));
+                    if (recvQueue.Count > NetworkConfig.RecvQueueWarningLevel)
+                    {
+                        TimeSpan elapsed = DateTime.Now - lastWarnTime;
+                        if (elapsed.TotalSeconds > 10)
+                        {
+                            Debug.LogWarning($"[Transport] Receive Queue is piled too much events: {recvQueue.Count}");
+                            lastWarnTime = DateTime.Now;
+                        }
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected during disconnect - stop gracefully
+                Debug.LogWarning($"[Transport] Receive proc cancelled! tag={tag}");
+            }
+            catch (IOException e)
+            {
+                // Network error or connection closed
+                Debug.LogWarning($"[Transport] Receive network error: tag={tag}, reason={e}");
+            }
+            catch (SocketException e)
+            {
+                // Socket error
+                Debug.LogWarning($"[Transport] Receive socket error: tag={tag}, reason={e}");
+            }
+            catch (ObjectDisposedException e)
+            {
+                // Stream or socket was disposed
+                Debug.LogWarning($"[Transport] Receive disposed: tag={tag}, reason={e}");
+            }
+            finally
+            {
+                stream.Close();
+                Socket.Close();
+
+                recvQueue.Enqueue(new Event(tag, EventType.Disconnected, null));
+            }
+        }
+
+        /// <summary>
+        /// Send loop. This method blocks until the connection is closed or cancelled.
+        /// </summary>
+        /// <param name="tag">Connection tag for logging.</param>
+        /// <param name="sendQueue">Queue containing messages to send.</param>
+        /// <param name="mre">Signal to wake the send thread when data is available.</param>
+        /// <param name="cancellationToken">Token to signal cancellation.</param>
+        public void Send(string tag, SafeQueue<byte[]> sendQueue, ManualResetEvent mre, CancellationToken cancellationToken)
+        {
+            Stream stream = GetStream();
+            List<byte[]> messageBuffer = new List<byte[]>();  // Reusable buffer to avoid allocations
+
+            try
+            {
+                while (Socket.Connected && !cancellationToken.IsCancellationRequested)
+                {
+                    // reset the signal
+                    mre.Reset();
+
+                    if (sendQueue.TryDequeueAll(messageBuffer))
+                    {
+                        if (!SendMessage(stream, messageBuffer))
+                            break;
+                    }
+
+                    // wait for more data blockingly, or until cancellation is requested
+                    WaitHandle.WaitAny(new WaitHandle[] { mre, cancellationToken.WaitHandle });
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected during disconnect - stop gracefully
+                Debug.LogWarning($"[Transport] Send proc cancelled! tag={tag}");
+            }
+            catch (IOException e)
+            {
+                // Network error while sending
+                Debug.LogWarning($"[Transport] Send network error: tag={tag}, reason={e}");
+            }
+            catch (SocketException e)
+            {
+                // Socket error while sending
+                Debug.LogWarning($"[Transport] Send socket error: tag={tag}, reason={e}");
+            }
+            catch (ObjectDisposedException e)
+            {
+                // Stream or socket was disposed
+                Debug.LogWarning($"[Transport] Send disposed: tag={tag}, reason={e}");
+            }
+            finally
+            {
+                // When we close the socket in send loop, the receive loop will finally encounter failure
+                // and fire the Disconnected event. Thus we do not need fire the event here.
+                stream.Close();
+                Socket.Close();
+            }
+        }
+
+        private bool SendMessage(Stream stream, List<byte[]> messages)
         {
             try
             {
@@ -183,7 +279,7 @@ namespace NT.Core.Net
             }
         }
 
-        internal static void SendMessageBatch(Stream stream, List<byte[]> messages, ref int startIndex)
+        private void SendMessageBatch(Stream stream, List<byte[]> messages, ref int startIndex)
         {
             // calculate how many messages we can fit in this batch
             int totalSize = 0;
@@ -192,7 +288,7 @@ namespace NT.Core.Net
             while (endIndex < messages.Count)
             {
                 int messageSize = sizeof(int) + messages[endIndex].Length;
-                if (totalSize + messageSize > MaxSendBufferSize)
+                if (totalSize + messageSize > NetworkConfig.MaxSendBufferSize)
                     break;
                 totalSize += messageSize;
                 endIndex++;
@@ -204,7 +300,6 @@ namespace NT.Core.Net
 
             // Use ThreadStatic buffer if within size limit, otherwise allocate temporary
             byte[] buffer = GetOrCreateBuffer(totalSize);
-            bool isTempBuffer = buffer.Length > MaxThreadStaticBufferSize;
 
             int pos = 0;
             for (int i = startIndex; i < endIndex; i++)
@@ -231,22 +326,7 @@ namespace NT.Core.Net
             startIndex = endIndex;
         }
 
-        /// <summary>
-        /// Gets or creates the ThreadStatic buffer, capped at MaxThreadStaticBufferSize.
-        /// </summary>
-        private static byte[] GetOrCreateBuffer(int minimumSize)
-        {
-            if (minimumSize > MaxThreadStaticBufferSize)
-                minimumSize = MaxThreadStaticBufferSize;
-
-            if (_buffer == null || _buffer.Length < minimumSize)
-            {
-                _buffer = new byte[minimumSize];
-            }
-            return _buffer;
-        }
-
-        internal static bool ReceiveMessage(Stream stream, out byte[] data)
+        private bool ReceiveMessage(Stream stream, out byte[] data)
         {
             data = null;
 
@@ -260,7 +340,7 @@ namespace NT.Core.Net
             int size = Utils.ToInt32(_header);
 
             // Validate message size
-            if (size <= 0 || size > MaxMessageSize)
+            if (size <= 0 || size > NetworkConfig.MaxMessageSize)
             {
                 Debug.LogError($"[Transport] Receive invalid message size: {size}");
                 return false;
@@ -279,113 +359,18 @@ namespace NT.Core.Net
         }
 
         /// <summary>
-        /// Receive thread procedure. Receives raw byte messages from the server and queues events.
-        /// Uses length-prefix protocol: [4-byte length][payload]
+        /// Gets or creates the ThreadStatic buffer, capped at MaxThreadStaticBufferSize.
         /// </summary>
-        /// <param name="tag">Connection tag for logging and event tagging.</param>
-        /// <param name="transport">The transport instance.</param>
-        /// <param name="recvQueue">Queue to enqueue received events.</param>
-        /// <param name="cancellationToken">Token to signal cancellation.</param>
-        public static void Receive(string tag, Transport transport, ConcurrentQueue<Event> recvQueue, CancellationToken cancellationToken)
+        private static byte[] GetOrCreateBuffer(int minimumSize)
         {
-            Stream stream = transport.GetStream();
-            DateTime lastWarnTime = DateTime.Now;
+            if (minimumSize > NetworkConfig.MaxThreadStaticBufferSize)
+                minimumSize = NetworkConfig.MaxThreadStaticBufferSize;
 
-            try
+            if (_buffer == null || _buffer.Length < minimumSize)
             {
-                recvQueue.Enqueue(new Event(tag, EventType.Connected, null));
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    byte[] data;
-                    if (!ReceiveMessage(stream, out data))
-                        break;
-
-                    // Drop packet if queue is at maximum size to prevent unbounded memory growth
-                    if (recvQueue.Count >= MaxRecvQueueSize)
-                    {
-                        Debug.LogError($"[Transport] Receive queue full ({recvQueue.Count}), dropping packet to prevent memory exhaustion");
-                        continue;
-                    }
-
-                    recvQueue.Enqueue(new Event(tag, EventType.Data, data));
-                    if (recvQueue.Count > RecvQueueWarningLevel)
-                    {
-                        TimeSpan elapsed = DateTime.Now - lastWarnTime;
-                        if (elapsed.TotalSeconds > 10)
-                        {
-                            Debug.LogWarning($"[Transport] Receive Queue is piled too much events: {recvQueue.Count}");
-                            lastWarnTime = DateTime.Now;
-                        }
-                    }
-                }
+                _buffer = new byte[minimumSize];
             }
-            catch (OperationCanceledException)
-            {
-                // Expected during disconnect - stop gracefully
-                Debug.LogWarning($"[Transport] Receive proc cancelled! tag={tag}");
-            }
-            catch (Exception e)
-            {
-                // remote closed the connection or we closed it
-                Debug.LogWarning($"[Transport] Receive proc finished! tag={tag}, reason={e}");
-            }
-            finally
-            {
-                stream.Close();
-                transport.Socket.Close();
-
-                recvQueue.Enqueue(new Event(tag, EventType.Disconnected, null));
-            }
-        }
-
-        /// <summary>
-        /// Send thread procedure. Sends messages from the send queue to the server.
-        /// </summary>
-        /// <param name="tag">Connection tag for logging.</param>
-        /// <param name="transport">The transport instance.</param>
-        /// <param name="sendQueue">Queue containing messages to send.</param>
-        /// <param name="mre">Signal to wake the send thread when data is available.</param>
-        /// <param name="cancellationToken">Token to signal cancellation.</param>
-        public static void Send(string tag, Transport transport, SafeQueue<byte[]> sendQueue, ManualResetEvent mre, CancellationToken cancellationToken)
-        {
-            Stream stream = transport.GetStream();
-            List<byte[]> messageBuffer = new List<byte[]>();  // Reusable buffer to avoid allocations
-
-            try
-            {
-                while (transport.Socket.Connected && !cancellationToken.IsCancellationRequested)
-                {
-                    // reset the signal
-                    mre.Reset();
-
-                    if (sendQueue.TryDequeueAll(messageBuffer))
-                    {
-                        if (!SendMessage(stream, messageBuffer))
-                            break;
-                    }
-
-                    // wait for more data blockingly, or until cancellation is requested
-                    WaitHandle.WaitAny(new WaitHandle[] { mre, cancellationToken.WaitHandle });
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected during disconnect - stop gracefully
-                Debug.LogWarning($"[Transport] Send proc cancelled! tag={tag}");
-            }
-            catch (Exception e)
-            {
-                // Exceptions happen when thread is stopped or connection is closed by either
-                // local or remote. Stop and cleanup gracefully
-                Debug.LogWarning($"[Transport] Send proc finished! tag={tag}, reason={e}");
-            }
-            finally
-            {
-                // When we close the socket in send loop, the receive loop will finally encounter failure
-                // and fire the Disconnected event. Thus we do not need fire the event here.
-                stream.Close();
-                transport.Socket.Close();
-            }
+            return _buffer;
         }
     }
 }

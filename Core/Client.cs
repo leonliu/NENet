@@ -1,6 +1,7 @@
 #if !UNITY_WEBGL
 using System;
 using System.Collections.Concurrent;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -90,6 +91,8 @@ namespace NT.Core.Net
 
         void RecvThreadFunc(string ip, int port)
         {
+            bool receiveStarted = false;
+
             try
             {
                 // this is a blocking call
@@ -101,27 +104,42 @@ namespace NT.Core.Net
                 _transport.Socket.SendTimeout = this.SendTimeout;
 
                 // start send thread
-                _sendThread = new Thread(() => { Transport.Send(Ctag, _transport, _sendQueue, _sendDataSignal, _cts.Token); });
+                _sendThread = new Thread(() => { _transport.Send(Ctag, _sendQueue, _sendDataSignal, _cts.Token); });
                 _sendThread.IsBackground = true;
                 _sendThread.Start();
 
                 // start receive loop
-                Transport.Receive(Ctag, _transport, _recvQueue, _cts.Token);
+                receiveStarted = true;
+                _transport.Receive(Ctag, _recvQueue, _cts.Token);
             }
             catch (SocketException e)
             {
-                // connection fail
-                Debug.LogWarning($"[Client] connection failed: tag={Ctag}, reason={e}");
-                _recvQueue.Enqueue(new Event(Ctag, EventType.Disconnected, null));
+                // Connection failed (before receive loop started)
+                // Once receive loop starts, its finally block handles Disconnected event
+                if (!receiveStarted)
+                {
+                    Debug.LogWarning($"[Client] connection failed: tag={Ctag}, reason={e}");
+                    _recvQueue.Enqueue(new Event(Ctag, EventType.Disconnected, null));
+                }
+                else
+                {
+                    Debug.LogWarning($"[Client] socket error: tag={Ctag}, reason={e}");
+                }
+            }
+            catch (IOException e)
+            {
+                // Receive loop handles Disconnected in finally block
+                Debug.LogWarning($"[Client] network error: tag={Ctag}, reason={e}");
+            }
+            catch (ObjectDisposedException e)
+            {
+                // Receive loop handles Disconnected in finally block
+                Debug.LogWarning($"[Client] transport disposed: tag={Ctag}, reason={e}");
             }
             catch (OperationCanceledException)
             {
-                // Expected during disconnect - ignore
-            }
-            catch (Exception e)
-            {
-                // other unexpected exceptions
-                Debug.LogWarning($"[Client] receive exception: tag={Ctag}, exception={e}");
+                // Expected during disconnect - Receive loop handles Disconnected in finally block
+                Debug.LogWarning($"[Client] operation cancelled: tag={Ctag}");
             }
 
             // we may be here as connecting failed or connection closed or other exceptions happened
@@ -237,7 +255,7 @@ namespace NT.Core.Net
             }
             else if (Connected)
             {
-                if (data.Length <= Transport.MaxMessageSize)
+                if (data.Length <= NetworkConfig.MaxMessageSize)
                 {
                     _sendQueue.Enqueue(data);
                     _sendDataSignal.Set();
