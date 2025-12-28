@@ -269,15 +269,15 @@ namespace NT.Core.Net.Security
                     throw new ArgumentException("Poly1305 key must be 32 bytes", nameof(key));
 
                 // Key clamping (RFC 7539 Section 2.5.1)
-                // r &= 0xffffffc0ffffffc0ffffffc0fffffff
+                // r &= 0x0ffffffc0ffffffc0ffffffc0fffffff
                 uint r0 = Utils.ToUInt32LittleEndian(key, 0) & 0x0fffffff;
                 uint r1 = Utils.ToUInt32LittleEndian(key, 4) & 0x0ffffffc;
                 uint r2 = Utils.ToUInt32LittleEndian(key, 8) & 0x0ffffffc;
                 uint r3 = Utils.ToUInt32LittleEndian(key, 12) & 0x0ffffffc;
 
-                // Pre-compute r[i] * 5/4 for the reduction trick
+                // Pre-compute r[i] * 5/4 for the reduction trick, e.g. r1 * (1 + 1/4) = r1 * 5/4
                 // Since bottom 2 bits of r1, r2, r3 are cleared, r[i] >> 2 loses no info
-                uint s1 = r1 + (r1 >> 2);  // r1 * (1 + 1/4) = r1 * 5/4
+                uint s1 = r1 + (r1 >> 2);
                 uint s2 = r2 + (r2 >> 2);
                 uint s3 = r3 + (r3 >> 2);
 
@@ -348,11 +348,12 @@ namespace NT.Core.Net.Security
 
                 // Final reduction: compare to modulus p = 2^130 - 5
                 // Compute g = h + (-p mod 2^130) = h + 5
-                uint g0 = (uint)((ulong)h0 + 5);
-                uint g1 = (uint)((ulong)h1 + ((ulong)h0 + 5 >> 32));
-                uint g2 = (uint)((ulong)h2 + ((ulong)h1 + ((ulong)h0 + 5 >> 32) >> 32));
-                uint g3 = (uint)((ulong)h3 + ((ulong)h2 + ((ulong)h1 + ((ulong)h0 + 5 >> 32) >> 32) >> 32));
-                uint g4 = h4 + (uint)((ulong)h3 + ((ulong)h2 + ((ulong)h1 + ((ulong)h0 + 5 >> 32) >> 32) >> 32) >> 32);
+                ulong t;
+                uint g0 = (uint)(t = (ulong)h0 + 5);
+                uint g1 = (uint)(t = (ulong)h1 + (t >> 32));
+                uint g2 = (uint)(t = (ulong)h2 + (t >> 32));
+                uint g3 = (uint)(t = (ulong)h3 + (t >> 32));
+                uint g4 = h4 + (uint)(t >> 32);
 
                 // Constant-time conditional: if g4 >> 2 (carry into 131st bit), use g, else use h
                 uint mask = 0 - (g4 >> 2);
@@ -367,7 +368,6 @@ namespace NT.Core.Net.Security
                 h3 = (h3 & mask) | g3;
 
                 // mac = (h + nonce) % 2^128 (nonce is key bytes 16-31)
-                ulong t;
                 uint n0 = Utils.ToUInt32LittleEndian(key, 16);
                 uint n1 = Utils.ToUInt32LittleEndian(key, 20);
                 uint n2 = Utils.ToUInt32LittleEndian(key, 24);
