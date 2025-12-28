@@ -193,8 +193,12 @@ namespace NT.Core.Net.Security
         }
 
         /// <summary>
-        /// Initializes the ChaCha20 state.
+        /// Initializes the ChaCha20 state (16 32-bit words, little endian).
         /// [0-3] = Sigma constant, [4-11] = key, [12] = counter, [13-15] = nonce.
+        /// [C, C, C, C]
+        /// [K, K, K, K]
+        /// [K, K, K, K]
+        /// [B, N, N, N]
         /// </summary>
         private void InitializeState(uint[] state, byte[] key, byte[] nonce, uint counter)
         {
