@@ -43,7 +43,7 @@ namespace NT.Core.Net
         /// <param name="token">The token identifier.</param>
         /// <param name="body">The packet body data.</param>
         /// <returns>True if the packet was encoded and queued successfully, false otherwise.</returns>
-        public bool SendPacket(uint command, ulong token, byte[] body)
+        public bool Send(uint command, ulong token, byte[] body)
         {
             try
             {

@@ -19,7 +19,10 @@ namespace NT.Core.Net
         {
             get
             {
-                return _transport != null && _transport.Connected;
+                lock (_transportLock)
+                {
+                    return _transport != null && _transport.Connected;
+                }
             }
         }
 
@@ -34,9 +37,9 @@ namespace NT.Core.Net
         /// <value></value>
         public string Ctag { get => _tag + "#" + _cid; }
         /// <summary>
-        /// Number of events piled in receive queue
+        /// Number of events in the receive queue.
         /// </summary>
-        public int RecvQueueWatermark => _recvQueue.Count;
+        public int RecvQueueCount => _recvQueue.Count;
 
         /// <summary>
         /// Disables a nagle algorithm when send or receive buffers are not full.
@@ -60,6 +63,7 @@ namespace NT.Core.Net
         /// </summary>
         public TlsOptions TlsOptions { get; set; }
 
+        private readonly object _transportLock = new object();
         private Transport _transport;
 
         // tag of the client
@@ -92,25 +96,34 @@ namespace NT.Core.Net
         void RecvThreadFunc(string ip, int port)
         {
             bool receiveStarted = false;
+            Transport transport = null;
+
+            lock (_transportLock)
+            {
+                transport = _transport;
+            }
+
+            if (transport == null)
+                return;
 
             try
             {
                 // this is a blocking call
-                _transport.Connect(ip, port);
+                transport.Connect(ip, port);
                 Interlocked.Exchange(ref _connecting, 0);
 
                 // now we connected and the underlied socket is created, set basic options
-                _transport.Socket.NoDelay = this.NoDelay;
-                _transport.Socket.SendTimeout = this.SendTimeout;
+                transport.Socket.NoDelay = this.NoDelay;
+                transport.Socket.SendTimeout = this.SendTimeout;
 
                 // start send thread
-                _sendThread = new Thread(() => { _transport.Send(Ctag, _sendQueue, _sendDataSignal, _cts.Token); });
+                _sendThread = new Thread(() => { transport.Send(Ctag, _sendQueue, _sendDataSignal, _cts.Token); });
                 _sendThread.IsBackground = true;
                 _sendThread.Start();
 
                 // start receive loop
                 receiveStarted = true;
-                _transport.Receive(Ctag, _recvQueue, _cts.Token);
+                transport.Receive(Ctag, _recvQueue, _cts.Token);
             }
             catch (SocketException e)
             {
@@ -149,7 +162,7 @@ namespace NT.Core.Net
             Interlocked.Exchange(ref _connecting, 0);
 
             // cleanup in case of connect fail
-            if (_transport != null) _transport.Close();
+            transport?.Close();
         }
 
         /// <summary>
@@ -187,7 +200,10 @@ namespace NT.Core.Net
             _cts = new CancellationTokenSource();
 
             // Create transport using factory method
-            _transport = Transport.Create(TlsOptions, AddressFamily);
+            lock (_transportLock)
+            {
+                _transport = Transport.Create(TlsOptions, AddressFamily);
+            }
 
             // drain any leftover events from previous connection
             int leftoverCount = 0;
@@ -213,18 +229,27 @@ namespace NT.Core.Net
         {
             if (Connecting || Connected)
             {
-                // Signal cancellation to threads
+                // Signal cancellation FIRST to wake up threads from WaitAny
                 _cts?.Cancel();
 
-                _transport.Close();
+                // Wake up the send thread so it can see the cancellation signal
+                _sendDataSignal?.Set();
+
+                Transport transportToClose = null;
+                lock (_transportLock)
+                {
+                    transportToClose = _transport;
+                    _transport = null;
+                }
+
+                // Close the transport (this will cause send/receive loops to exit)
+                transportToClose?.Close();
 
                 Interlocked.Exchange(ref _connecting, 0);
                 _sendQueue.Clear();
 
                 // drain receive queue to prevent memory leak of unprocessed packets
                 while (_recvQueue.TryDequeue(out _)) { }
-
-                _transport = null;
 
                 // dispose and recreate the signal for next connection
                 _sendDataSignal?.Dispose();
