@@ -1,6 +1,8 @@
 #if !UNITY_WEBGL
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -57,6 +59,13 @@ namespace NT.Core.Net
         /// Maximum send buffer size for message combining, 64KB should be enough.
         /// </summary>
         private const int MaxSendBufferSize = 64 * 1024;
+
+        /// <summary>
+        /// Maximum size for ThreadStatic send buffer. If a single batch exceeds this,
+        /// we allocate a temporary buffer instead of growing the ThreadStatic one.
+        /// This prevents unbounded memory growth in long-lived threads.
+        /// </summary>
+        private const int MaxThreadStaticBufferSize = 64 * 1024;
 
         /// <summary>
         /// Preferred address family for connections. Unspecified = try IPv6 first, fallback to IPv4.
@@ -153,14 +162,14 @@ namespace NT.Core.Net
             _socket.Close();
         }
 
-        internal static bool SendMessage(Stream stream, byte[][] messages)
+        internal static bool SendMessage(Stream stream, List<byte[]> messages)
         {
             try
             {
                 // combine multiple messages to avoid TCP overhead and get higher performance
                 // if total size exceeds MaxSendBufferSize, split into multiple batches
                 int startIndex = 0;
-                while (startIndex < messages.Length)
+                while (startIndex < messages.Count)
                 {
                     SendMessageBatch(stream, messages, ref startIndex);
                 }
@@ -174,13 +183,13 @@ namespace NT.Core.Net
             }
         }
 
-        internal static void SendMessageBatch(Stream stream, byte[][] messages, ref int startIndex)
+        internal static void SendMessageBatch(Stream stream, List<byte[]> messages, ref int startIndex)
         {
             // calculate how many messages we can fit in this batch
             int totalSize = 0;
             int endIndex = startIndex;
 
-            while (endIndex < messages.Length)
+            while (endIndex < messages.Count)
             {
                 int messageSize = sizeof(int) + messages[endIndex].Length;
                 if (totalSize + messageSize > MaxSendBufferSize)
@@ -193,10 +202,9 @@ namespace NT.Core.Net
             if (endIndex == startIndex)
                 endIndex = startIndex + 1;
 
-            if (_buffer == null || _buffer.Length < totalSize)
-            {
-                _buffer = new byte[totalSize];
-            }
+            // Use ThreadStatic buffer if within size limit, otherwise allocate temporary
+            byte[] buffer = GetOrCreateBuffer(totalSize);
+            bool isTempBuffer = buffer.Length > MaxThreadStaticBufferSize;
 
             int pos = 0;
             for (int i = startIndex; i < endIndex; i++)
@@ -210,17 +218,32 @@ namespace NT.Core.Net
                 Utils.GetBytes(messages[i].Length, _header);
 
                 // pack header and message data to buffer
-                Array.Copy(_header, 0, _buffer, pos, _header.Length);
+                Array.Copy(_header, 0, buffer, pos, _header.Length);
                 pos += _header.Length;
-                Array.Copy(messages[i], 0, _buffer, pos, messages[i].Length);
+                Array.Copy(messages[i], 0, buffer, pos, messages[i].Length);
                 pos += messages[i].Length;
             }
 
             // send to remote, the Write method blocks until the requested number
             // of bytes is sent or a SocketException is thrown.
-            stream.Write(_buffer, 0, totalSize);
+            stream.Write(buffer, 0, totalSize);
 
             startIndex = endIndex;
+        }
+
+        /// <summary>
+        /// Gets or creates the ThreadStatic buffer, capped at MaxThreadStaticBufferSize.
+        /// </summary>
+        private static byte[] GetOrCreateBuffer(int minimumSize)
+        {
+            if (minimumSize > MaxThreadStaticBufferSize)
+                minimumSize = MaxThreadStaticBufferSize;
+
+            if (_buffer == null || _buffer.Length < minimumSize)
+            {
+                _buffer = new byte[minimumSize];
+            }
+            return _buffer;
         }
 
         internal static bool ReceiveMessage(Stream stream, out byte[] data)
@@ -243,10 +266,14 @@ namespace NT.Core.Net
                 return false;
             }
 
-            // Read message payload
-            data = new byte[size];
+            // Read message payload - rent from ArrayPool to reduce allocations
+            data = ArrayPool<byte>.Shared.Rent(size);
             if (!stream.ReadExactly(data, size))
+            {
+                ArrayPool<byte>.Shared.Return(data, clearArray: false);
+                data = null;
                 return false;
+            }
 
             return true;
         }
@@ -322,6 +349,7 @@ namespace NT.Core.Net
         public static void Send(string tag, Transport transport, SafeQueue<byte[]> sendQueue, ManualResetEvent mre, CancellationToken cancellationToken)
         {
             Stream stream = transport.GetStream();
+            List<byte[]> messageBuffer = new List<byte[]>();  // Reusable buffer to avoid allocations
 
             try
             {
@@ -330,10 +358,9 @@ namespace NT.Core.Net
                     // reset the signal
                     mre.Reset();
 
-                    byte[][] messages;
-                    if (sendQueue.TryDequeueAll(out messages))
+                    if (sendQueue.TryDequeueAll(messageBuffer))
                     {
-                        if (!SendMessage(stream, messages))
+                        if (!SendMessage(stream, messageBuffer))
                             break;
                     }
 

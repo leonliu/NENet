@@ -73,6 +73,30 @@ namespace NT.Core.Net
         }
 
         /// <summary>
+        /// Tries to remove and return all the objects in the queue, using a provided buffer
+        /// to avoid allocations. The buffer is cleared before use.
+        /// </summary>
+        /// <param name="buffer">A list to store the dequeued items. Will be cleared before use.</param>
+        /// <returns>true if there are objects removed, otherwise false</returns>
+        public bool TryDequeueAll(List<T> buffer)
+        {
+            lock (_queue)
+            {
+                if (_queue.Count == 0)
+                {
+                    buffer.Clear();
+                    return false;
+                }
+                buffer.Clear();
+                while (_queue.Count > 0)
+                {
+                    buffer.Add(_queue.Dequeue());
+                }
+                return true;
+            }
+        }
+
+        /// <summary>
         /// Removes all objects from the queue.
         /// </summary>
         public void Clear()
